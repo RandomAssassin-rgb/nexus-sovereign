@@ -1,0 +1,97 @@
+{
+  "info": {
+    "name": "Nexus Sovereign — Guidewire Integration API",
+    "description": "Complete Postman collection for all Nexus Sovereign endpoints. Import this into Postman to interact with ClaimCenter, PolicyCenter, and Autopilot Remediation APIs.",
+    "schema": "https://schema.getpostman.com/json/collection/v2.1.0/collection.json",
+    "version": "1.0.0"
+  },
+  "variable": [
+    { "key": "base_url", "value": "https://nexus-sovereign.guidewirecloud.com/api/v1", "type": "string" },
+    { "key": "auth_token", "value": "{{TEE_GAUTH_TOKEN}}", "type": "string" }
+  ],
+  "item": [
+    {
+      "name": "ClaimCenter — Hardened Claim Submit",
+      "request": {
+        "method": "POST",
+        "header": [
+          { "key": "Authorization", "value": "Bearer {{auth_token}}" },
+          { "key": "Content-Type", "value": "application/json" },
+          { "key": "X-TEE-Attestation", "value": "{{TEE_ATTESTATION_TOKEN}}" }
+        ],
+        "url": "{{base_url}}/claimcenter/submit",
+        "body": {
+          "mode": "raw",
+          "raw": "{ \"$ref\": \"claimcenter-hardened-payload.json\" }"
+        },
+        "description": "Submit a TEE-attested hardened claim payload to ClaimCenter STP pipeline."
+      }
+    },
+    {
+      "name": "PolicyCenter — Weekly Rating Engine Trigger",
+      "request": {
+        "method": "POST",
+        "header": [
+          { "key": "Authorization", "value": "Bearer {{auth_token}}" },
+          { "key": "Content-Type", "value": "application/json" }
+        ],
+        "url": "{{base_url}}/policycenter/rating-engine/weekly",
+        "body": {
+          "mode": "raw",
+          "raw": "{ \"$ref\": \"policycenter-weekly-rating-engine.json\" }"
+        },
+        "description": "Trigger the weekly dynamic premium rating engine for all active policies."
+      }
+    },
+    {
+      "name": "Autopilot — Remediation Trigger",
+      "request": {
+        "method": "POST",
+        "header": [
+          { "key": "Authorization", "value": "Bearer {{auth_token}}" },
+          { "key": "Content-Type", "value": "application/json" },
+          { "key": "X-Circuit-Breaker", "value": "P-MAX-ENABLED" }
+        ],
+        "url": "{{base_url}}/autopilot/remediation/trigger",
+        "body": {
+          "mode": "raw",
+          "raw": "{ \"$ref\": \"autopilot-remediation-trigger.json\" }"
+        },
+        "description": "Fire the autopilot remediation trigger. Requires P-Max circuit breaker header."
+      }
+    },
+    {
+      "name": "GAuth — TEE Identity Attestation",
+      "request": {
+        "method": "POST",
+        "header": [
+          { "key": "Content-Type", "value": "application/json" }
+        ],
+        "url": "{{base_url}}/auth/tee/attest",
+        "body": {
+          "mode": "raw",
+          "raw": "{ \"device_id\": \"{{DEVICE_ID}}\", \"play_integrity_token\": \"{{PLAY_INTEGRITY_TOKEN}}\" }"
+        },
+        "description": "Initiate a TEE-backed GAuth handshake and receive a short-lived attestation token."
+      }
+    },
+    {
+      "name": "Risk — H3 Resolution-11 Mask Query",
+      "request": {
+        "method": "GET",
+        "header": [
+          { "key": "Authorization", "value": "Bearer {{auth_token}}" }
+        ],
+        "url": {
+          "raw": "{{base_url}}/risk/h3-mask?resolution=11&lat={{LATITUDE}}&lng={{LONGITUDE}}",
+          "query": [
+            { "key": "resolution", "value": "11" },
+            { "key": "lat", "value": "{{LATITUDE}}" },
+            { "key": "lng", "value": "{{LONGITUDE}}" }
+          ]
+        },
+        "description": "Query the H3 Resolution-11 geospatial risk mask for a given lat/lng coordinate."
+      }
+    }
+  ]
+}

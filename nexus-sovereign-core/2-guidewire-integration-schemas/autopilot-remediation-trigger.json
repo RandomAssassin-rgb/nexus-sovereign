@@ -1,0 +1,36 @@
+{
+  "$schema": "https://nexus-sovereign.guidewirecloud.com/schemas/autopilot/remediation/v1",
+  "metadata": {
+    "payload_version": "1.0.0",
+    "classification": "AUTOPILOT_REMEDIATION",
+    "triggered_at": "{{ISO_TIMESTAMP}}",
+    "triggered_by": "SentinelEdgeKernel"
+  },
+  "trigger": {
+    "event_id": "{{EVENT_ID}}",
+    "event_type": "SENTINEL_ANOMALY_DETECTED",
+    "severity": "HIGH",
+    "affected_system": "{{AFFECTED_SYSTEM}}",
+    "anomaly_details": {
+      "type": "{{ANOMALY_TYPE}}",
+      "confidence_score": "{{CONFIDENCE_0_TO_1}}",
+      "h3_blast_radius_index": "{{H3_INDEX}}",
+      "silicon_clock_skew_ms": "{{CLOCK_SKEW_MS}}"
+    }
+  },
+  "remediation": {
+    "strategy": "ISOLATE_AND_REROUTE",
+    "actions": [
+      { "step": 1, "action": "ISOLATE_AFFECTED_NODE", "timeout_seconds": 10 },
+      { "step": 2, "action": "REROUTE_TRAFFIC_TO_STANDBY", "timeout_seconds": 5 },
+      { "step": 3, "action": "NOTIFY_CODEOWNERS", "timeout_seconds": 2 },
+      { "step": 4, "action": "LOG_TO_SIEM", "timeout_seconds": 1 },
+      { "step": 5, "action": "RESTORE_OR_ESCALATE", "timeout_seconds": 300 }
+    ],
+    "circuit_breaker": {
+      "p_max_check_required": true,
+      "halt_on_solvency_breach": true
+    },
+    "rollback_enabled": true
+  }
+}

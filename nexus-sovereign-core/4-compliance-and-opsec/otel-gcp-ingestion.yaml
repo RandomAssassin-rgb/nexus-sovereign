@@ -1,0 +1,409 @@
+# =============================================================================
+# Nexus Sovereign Core — OpenTelemetry Collector Configuration
+# Target: Google Cloud Operations Suite (Cloud Trace, Cloud Monitoring, Cloud Logging)
+# Version: 2.1.0
+# Classification: INSTITUTIONAL CONFIDENTIAL — AUDIT COPY
+# Maintainer: Platform Engineering — nexus-platform@nexus-sovereign.internal
+# =============================================================================
+# 
+# This configuration governs telemetry ingestion from all Sentinel Edge Kernel
+# nodes participating in JEP batch submission pipelines. It captures:
+#   - Hardware attestation lifecycle traces (TEE quote generation → verification)
+#   - RDTSC clock-skew metrics for adversarial detection
+#   - Parametric trigger evaluation spans
+#   - Guidewire STP submission traces with full voucher-level correlation
+#
+# Prerequisites:
+#   1. Google Cloud Project IAM: roles/monitoring.metricWriter,
+#      roles/cloudtrace.agent, roles/logging.logWriter
+#   2. Workload Identity Federation configured for each Sentinel Edge node
+#   3. GCP Secret Manager: nexus-sovereign-otel-sa-key (service account JSON)
+# =============================================================================
+
+extensions:
+  health_check:
+    endpoint: "0.0.0.0:13133"
+    path: "/health"
+
+  pprof:
+    endpoint: "localhost:1777"
+
+  zpages:
+    endpoint: "localhost:55679"
+
+  # File-based storage for retry queue persistence across collector restarts.
+  # Critical for high-velocity batch pipelines where data loss is unacceptable.
+  file_storage:
+    directory: /var/otel/nexus-sovereign/storage
+    timeout: 10s
+    compaction:
+      on_start: true
+      on_rebound: true
+      rebound_needed_threshold_mib: 100
+      rebound_trigger_threshold_mib: 10
+
+# =============================================================================
+# RECEIVERS — Ingestion endpoints for Sentinel Edge Kernels
+# =============================================================================
+receivers:
+
+  # Primary gRPC receiver for instrumented Sentinel Edge Kernel agents.
+  # All JEP batch pipeline services emit OTLP over mTLS-secured gRPC.
+  otlp/sentinel_edge:
+    protocols:
+      grpc:
+        endpoint: "0.0.0.0:4317"
+        tls:
+          cert_file: /etc/nexus-sovereign/tls/server.crt
+          key_file:  /etc/nexus-sovereign/tls/server.key
+          client_ca_file: /etc/nexus-sovereign/tls/sentinel-edge-ca.crt
+          # Require mutual TLS — unauthenticated nodes are rejected at transport layer.
+          # This is the first line of defense against spoofed telemetry injection.
+        max_recv_msg_size_mib: 64
+        max_concurrent_streams: 1024
+        keepalive:
+          server_parameters:
+            max_connection_idle: 120s
+            max_connection_age: 600s
+            max_connection_age_grace: 10s
+            time: 30s
+            timeout: 5s
+      # HTTP fallback for nodes behind restrictive firewalls (e.g., air-gapped enclaves).
+      http:
+        endpoint: "0.0.0.0:4318"
+        tls:
+          cert_file: /etc/nexus-sovereign/tls/server.crt
+          key_file:  /etc/nexus-sovereign/tls/server.key
+
+  # Prometheus scrape receiver for Sentinel Edge Kernel node-level hardware metrics.
+  # Captures RDTSC frequency measurements, TSC drift, and TEE health counters.
+  prometheus/hardware_metrics:
+    config:
+      scrape_configs:
+        - job_name: "sentinel_edge_hardware"
+          scrape_interval: 15s
+          scrape_timeout: 10s
+          honor_timestamps: true
+          # Targets are registered via Consul service discovery in production.
+          # Static targets used for lab/staging environments.
+          static_configs:
+            - targets:
+                - "sentinel-edge-01.nexus-sovereign.internal:9100"
+                - "sentinel-edge-02.nexus-sovereign.internal:9100"
+                - "sentinel-edge-03.nexus-sovereign.internal:9100"
+              labels:
+                deployment_tier: "production"
+                platform: "sentinel_edge_kernel"
+          metric_relabel_configs:
+            - source_labels: [__name__]
+              regex: "(rdtsc_drift_ppm|tsc_frequency_hz|tee_attestation_latency_ms|ntp_offset_ns|jep_vouchers_total|clock_skew_violations_total)"
+              action: keep
+
+  # Dedicated receiver for batch telemetry beacons emitted by the JEP batch processor.
+  # Each beacon corresponds to a single JEP batch lifecycle event.
+  otlp/jep_batch_pipeline:
+    protocols:
+      grpc:
+        endpoint: "0.0.0.0:4319"
+        tls:
+          cert_file: /etc/nexus-sovereign/tls/server.crt
+          key_file:  /etc/nexus-sovereign/tls/server.key
+          client_ca_file: /etc/nexus-sovereign/tls/jep-pipeline-ca.crt
+        max_recv_msg_size_mib: 128
+
+  # Filelog receiver for legacy node syslog output (nodes not yet upgraded to OTLP).
+  filelog/legacy_syslog:
+    include:
+      - /var/log/nexus-sovereign/sentinel-edge-*.log
+    multiline:
+      line_start_pattern: '^\d{4}-\d{2}-\d{2}T'
+    operators:
+      - type: regex_parser
+        regex: '^(?P<timestamp>\d{4}-\d{2}-\d{2}T\d{2}:\d{2}:\d{2}\.\d+Z)\s+(?P<level>[A-Z]+)\s+\[(?P<component>[^\]]+)\]\s+(?P<message>.+)$'
+        timestamp:
+          parse_from: attributes.timestamp
+          layout: '%Y-%m-%dT%H:%M:%S.%LZ'
+        severity:
+          parse_from: attributes.level
+
+# =============================================================================
+# PROCESSORS — Transformation, enrichment, and security filtering
+# =============================================================================
+processors:
+
+  # Memory limiter MUST be first processor in every pipeline to prevent OOM.
+  memory_limiter:
+    check_interval: 1s
+    limit_mib: 1024
+    spike_limit_mib: 256
+
+  # Batch processor: group telemetry for efficient GCP export.
+  # Tuned for high-throughput JEP voucher telemetry (1000+ spans per batch).
+  batch/standard:
+    send_batch_size: 5000
+    send_batch_max_size: 10000
+    timeout: 2s
+
+  # High-priority batch for clock-skew alerts — smaller batches, faster flush.
+  batch/clock_skew_alerts:
+    send_batch_size: 100
+    send_batch_max_size: 500
+    timeout: 200ms
+
+  # Resource detection: auto-populate GCP resource labels from GCE/GKE metadata.
+  resourcedetection/gcp:
+    detectors:
+      - gcp
+      - env
+      - system
+    timeout: 5s
+    override: false
+
+  # Resource attribute enrichment — tag all telemetry with Nexus Sovereign context.
+  resource/nexus_sovereign_labels:
+    attributes:
+      - key: "nexus.sovereign.platform"
+        value: "nexus-sovereign-core"
+        action: upsert
+      - key: "nexus.sovereign.schema_version"
+        value: "3.2.0"
+        action: upsert
+      - key: "nexus.sovereign.environment"
+        value: "${env:NEXUS_ENV}"            # injected: production | staging | lab
+        action: upsert
+      - key: "nexus.sovereign.compliance_framework"
+        value: "parametric_indemnity_v2"
+        action: upsert
+      - key: "service.namespace"
+        value: "nexus-sovereign"
+        action: upsert
+
+  # Attribute transform: promote key JEP fields to top-level span attributes
+  # to enable efficient querying in Cloud Trace and BigQuery export.
+  attributes/jep_promotion:
+    actions:
+      - key: "jep.batch_id"
+        action: insert
+        from_attribute: "batch_id"
+      - key: "jep.disruption_class"
+        action: insert
+        from_attribute: "disruption.event_class"
+      - key: "jep.severity_tier"
+        action: insert
+        from_attribute: "disruption.severity_tier"
+      - key: "jep.voucher_count"
+        action: insert
+        from_attribute: "batch.voucher_count"
+      - key: "jep.p_max_utilization_pct"
+        action: insert
+        from_attribute: "actuarial.p_max_utilization_percent"
+      - key: "jep.guidewire_stp_queue"
+        action: insert
+        from_attribute: "guidewire.stp_queue"
+
+  # Clock-skew filter: flag any span/metric where RDTSC-derived clock skew
+  # exceeds the institutional threshold (500 µs). These are escalated immediately.
+  # See Section 4 of the README for adversarial defense rationale.
+  filter/clock_skew_violations:
+    error_mode: ignore
+    traces:
+      span:
+        - 'attributes["rdtsc.consensus_skew_ns"] > 500000'
+        - 'attributes["rdtsc.consensus_skew_ns"] < -500000'
+
+  # Security filter: redact PII fields before export to prevent accidental PII logging.
+  # GCP Cloud Logging is SOC 2 Type II compliant, but defense-in-depth requires
+  # we never export raw PII — only pseudonymous hashes.
+  attributes/pii_redaction:
+    actions:
+      - key: "claimant.name"
+        action: delete
+      - key: "claimant.ssn"
+        action: delete
+      - key: "claimant.dob"
+        action: delete
+      - key: "employer.name"
+        action: delete
+      - key: "claimant.email"
+        action: delete
+
+  # Tail sampling: retain 100% of traces with errors, clock-skew violations,
+  # or high-value batches (>$1M gross indemnity). Sample 10% of routine traces.
+  tail_sampling/nexus_sovereign:
+    decision_wait: 30s
+    num_traces: 100000
+    expected_new_traces_per_sec: 5000
+    policies:
+      - name: "always_sample_errors"
+        type: status_code
+        status_code: {status_codes: [ERROR]}
+      - name: "always_sample_clock_skew_violations"
+        type: string_attribute
+        string_attribute:
+          key: "nexus.clock_skew_violation"
+          values: ["true"]
+          enabled_regex_matching: false
+      - name: "always_sample_high_value_batches"
+        type: numeric_attribute
+        numeric_attribute:
+          key: "jep.total_gross_indemnity_usd"
+          min_value: 1000000
+      - name: "always_sample_attestation_failures"
+        type: string_attribute
+        string_attribute:
+          key: "attestation.result"
+          values: ["failed", "revoked", "policy_mismatch"]
+      - name: "probabilistic_routine"
+        type: probabilistic
+        probabilistic: {sampling_percentage: 10}
+
+# =============================================================================
+# EXPORTERS — Google Cloud Operations Suite targets
+# =============================================================================
+exporters:
+
+  # Google Cloud Trace — distributed trace export.
+  # Requires: roles/cloudtrace.agent on the collector's service account.
+  googlecloud/traces:
+    project: "${env:GCP_PROJECT_ID}"
+    retry_on_failure:
+      enabled: true
+      initial_interval: 5s
+      max_interval: 30s
+      max_elapsed_time: 300s
+    sending_queue:
+      enabled: true
+      num_consumers: 20
+      queue_size: 10000
+      storage: file_storage
+
+  # Google Cloud Monitoring — metrics export (custom and system metrics).
+  # Requires: roles/monitoring.metricWriter
+  googlecloud/metrics:
+    project: "${env:GCP_PROJECT_ID}"
+    metric:
+      service_resource_labels:
+        - "nexus.sovereign.environment"
+        - "nexus.sovereign.platform"
+      instrumentation_library_labels: true
+      create_service_timeseries: true
+    retry_on_failure:
+      enabled: true
+      initial_interval: 10s
+      max_interval: 60s
+      max_elapsed_time: 600s
+    sending_queue:
+      enabled: true
+      num_consumers: 10
+      queue_size: 5000
+
+  # Google Cloud Logging — structured log export.
+  # Requires: roles/logging.logWriter
+  # Logs are routed to the 'nexus-sovereign' log bucket with 365-day retention.
+  googlecloudmonitoring/logs:
+    project: "${env:GCP_PROJECT_ID}"
+
+  googlemanagedprometheus:
+    project: "${env:GCP_PROJECT_ID}"
+
+  # Dedicated Cloud Logging exporter for clock-skew violation alerts.
+  # These are written to the 'nexus-sovereign-security-alerts' log bucket
+  # with a separate IAM policy scoped to Security Operations personnel.
+  googlecloud/clock_skew_alerts:
+    project: "${env:GCP_PROJECT_ID}"
+    log:
+      default_log_name: "nexus-sovereign-clock-skew-violations"
+
+  # Debug exporter: enabled in staging only via environment variable.
+  # Never enable in production — exports all telemetry to stdout unredacted.
+  debug:
+    verbosity: detailed
+    sampling_initial: 5
+    sampling_thereafter: 200
+
+# =============================================================================
+# SERVICE — Pipeline wiring
+# =============================================================================
+service:
+  extensions:
+    - health_check
+    - pprof
+    - zpages
+    - file_storage
+
+  pipelines:
+
+    # --- Main Distributed Trace Pipeline ---
+    traces/sentinel_edge_main:
+      receivers: [otlp/sentinel_edge, otlp/jep_batch_pipeline]
+      processors:
+        - memory_limiter
+        - resourcedetection/gcp
+        - resource/nexus_sovereign_labels
+        - attributes/pii_redaction
+        - attributes/jep_promotion
+        - tail_sampling/nexus_sovereign
+        - batch/standard
+      exporters:
+        - googlecloud/traces
+
+    # --- Clock-Skew Violation Alert Pipeline ---
+    # Dedicated pipeline with minimal buffering to ensure near-realtime alerting.
+    traces/clock_skew_violations:
+      receivers: [otlp/sentinel_edge, otlp/jep_batch_pipeline]
+      processors:
+        - memory_limiter
+        - filter/clock_skew_violations
+        - resourcedetection/gcp
+        - resource/nexus_sovereign_labels
+        - batch/clock_skew_alerts
+      exporters:
+        - googlecloud/clock_skew_alerts
+
+    # --- Hardware Metrics Pipeline ---
+    metrics/hardware_telemetry:
+      receivers: [prometheus/hardware_metrics, otlp/sentinel_edge]
+      processors:
+        - memory_limiter
+        - resourcedetection/gcp
+        - resource/nexus_sovereign_labels
+        - batch/standard
+      exporters:
+        - googlecloud/metrics
+        - googlemanagedprometheus
+
+    # --- JEP Batch Audit Metrics Pipeline ---
+    metrics/jep_batch_audit:
+      receivers: [otlp/jep_batch_pipeline]
+      processors:
+        - memory_limiter
+        - resourcedetection/gcp
+        - resource/nexus_sovereign_labels
+        - attributes/jep_promotion
+        - batch/standard
+      exporters:
+        - googlecloud/metrics
+
+    # --- Structured Log Pipeline ---
+    logs/sentinel_edge:
+      receivers: [otlp/sentinel_edge, filelog/legacy_syslog, otlp/jep_batch_pipeline]
+      processors:
+        - memory_limiter
+        - resourcedetection/gcp
+        - resource/nexus_sovereign_labels
+        - attributes/pii_redaction
+        - batch/standard
+      exporters:
+        - googlemanagedprometheus
+
+  telemetry:
+    # Collector self-telemetry — monitors the monitor.
+    metrics:
+      level: detailed
+      address: "0.0.0.0:8888"
+    logs:
+      level: info
+      development: false
+      encoding: json
+      output_paths: ["/var/log/nexus-sovereign/otel-collector.log"]
+      error_output_paths: ["/var/log/nexus-sovereign/otel-collector-error.log"]

@@ -1,0 +1,651 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "urn:nexus-sovereign:jep-batch:v3.2.0",
+  "title": "JEP High-Velocity Batch Submission Schema",
+  "description": "JSON Extended Payload (JEP) schema governing batched parametric indemnity voucher submissions for high-velocity workforce disruption events. Supports 1,000+ hardware-attested vouchers per ingestion cycle with full Byzantine-fault-tolerant sequencing.",
+  "type": "object",
+  "required": [
+    "batchHeader",
+    "attestationManifest",
+    "voucherPayloads",
+    "batchFooter"
+  ],
+  "properties": {
+    "batchHeader": {
+      "type": "object",
+      "description": "Immutable batch-level metadata sealed at submission origin.",
+      "required": [
+        "batchId",
+        "schemaVersion",
+        "originNode",
+        "submissionTimestamp",
+        "rdtscEpochNs",
+        "batchSizeDeclaration",
+        "parameterSetId",
+        "disruptionClassification"
+      ],
+      "properties": {
+        "batchId": {
+          "type": "string",
+          "format": "uuid",
+          "description": "RFC 4122 UUID v4 uniquely identifying this submission batch. Must be globally unique across all ingestion cycles."
+        },
+        "schemaVersion": {
+          "type": "string",
+          "pattern": "^\\d+\\.\\d+\\.\\d+$",
+          "description": "Semantic version of this JEP schema. Must match the registered version in the schema registry.",
+          "example": "3.2.0"
+        },
+        "originNode": {
+          "type": "object",
+          "description": "Identity of the Sentinel Edge Kernel node originating this batch.",
+          "required": ["nodeId", "teeProvider", "firmwareVersion", "geoRegion"],
+          "properties": {
+            "nodeId": {
+              "type": "string",
+              "description": "Unique identifier of the originating Sentinel Edge node.",
+              "minLength": 16,
+              "maxLength": 64
+            },
+            "teeProvider": {
+              "type": "string",
+              "description": "Trusted Execution Environment provider.",
+              "enum": ["intel_sgx", "amd_sev_snp", "arm_trustzone", "aws_nitro_enclaves", "gcp_confidential_vm"]
+            },
+            "firmwareVersion": {
+              "type": "string",
+              "description": "TEE firmware/microcode version string for audit traceability."
+            },
+            "geoRegion": {
+              "type": "string",
+              "description": "H3 Resolution-11 hexagonal region ID of the originating node.",
+              "pattern": "^[0-9a-f]{15}$"
+            }
+          }
+        },
+        "submissionTimestamp": {
+          "type": "string",
+          "format": "date-time",
+          "description": "ISO 8601 UTC timestamp of batch sealing. Must be within ±5 seconds of rdtscEpochNs wall-clock consensus."
+        },
+        "rdtscEpochNs": {
+          "type": "object",
+          "description": "Hardware-level $RDTSC$ clock reading for adversarial clock-skew detection. See adversarial defense section.",
+          "required": ["tscValue", "tscFrequencyHz", "consensusSkewNs", "skewBound"],
+          "properties": {
+            "tscValue": {
+              "type": "string",
+              "description": "Unsigned 64-bit TSC counter value at batch-sealing time, encoded as a decimal string.",
+              "pattern": "^[0-9]+$"
+            },
+            "tscFrequencyHz": {
+              "type": "integer",
+              "description": "Processor TSC invariant frequency in Hz, obtained from CPUID[0x15] or hypervisor leaf.",
+              "minimum": 1000000,
+              "maximum": 10000000000
+            },
+            "consensusSkewNs": {
+              "type": "integer",
+              "description": "Signed delta in nanoseconds between local TSC-derived wall-clock and Byzantine-consensus cluster time.",
+              "minimum": -1000000,
+              "maximum": 1000000
+            },
+            "skewBound": {
+              "type": "integer",
+              "description": "Maximum permitted absolute clock-skew in nanoseconds (system-wide policy threshold).",
+              "default": 500000
+            }
+          }
+        },
+        "batchSizeDeclaration": {
+          "type": "object",
+          "description": "Pre-declared voucher counts used for integrity reconciliation at ingestion.",
+          "required": ["totalVouchers", "partitionCount"],
+          "properties": {
+            "totalVouchers": {
+              "type": "integer",
+              "description": "Total number of vouchers declared in this batch. Validated against len(voucherPayloads) at ingestion.",
+              "minimum": 1,
+              "maximum": 100000
+            },
+            "partitionCount": {
+              "type": "integer",
+              "description": "Number of logical partitions the vouchers are divided into for parallel processing.",
+              "minimum": 1,
+              "maximum": 256
+            }
+          }
+        },
+        "parameterSetId": {
+          "type": "string",
+          "format": "uuid",
+          "description": "Reference to the active Parametric Indemnity Parameter Set governing payout calculations for this batch."
+        },
+        "disruptionClassification": {
+          "type": "object",
+          "description": "Taxonomy of the workforce disruption event triggering this batch.",
+          "required": ["eventClass", "severityTier", "affectedSectors", "triggerMechanism"],
+          "properties": {
+            "eventClass": {
+              "type": "string",
+              "enum": [
+                "mass_layoff",
+                "plant_closure",
+                "corporate_restructuring",
+                "automated_displacement",
+                "gig_platform_deactivation",
+                "regulatory_shutdown",
+                "supply_chain_cascade"
+              ],
+              "description": "High-level classification of the workforce disruption event."
+            },
+            "severityTier": {
+              "type": "string",
+              "enum": ["tier_1_critical", "tier_2_major", "tier_3_significant", "tier_4_moderate"],
+              "description": "Actuarial severity tier governing P-Max solvency circuit breaker thresholds."
+            },
+            "affectedSectors": {
+              "type": "array",
+              "description": "NAICS sector codes of affected workforce segments.",
+              "items": {
+                "type": "string",
+                "pattern": "^[0-9]{2,6}$"
+              },
+              "minItems": 1
+            },
+            "triggerMechanism": {
+              "type": "string",
+              "enum": ["parametric_oracle", "sentinel_autopilot", "manual_adjuster_override", "regulatory_directive"],
+              "description": "The mechanism that triggered automated indemnity provisioning."
+            }
+          }
+        }
+      }
+    },
+    "attestationManifest": {
+      "type": "object",
+      "description": "Cryptographic attestation bundle for the entire batch, proving TEE integrity and identity.",
+      "required": [
+        "attestationType",
+        "quoteFormat",
+        "mrEnclave",
+        "mrSigner",
+        "isvProdId",
+        "isvSvn",
+        "reportData",
+        "attestationCertChain",
+        "pckCrlDistributionPoint",
+        "clockSkewProof"
+      ],
+      "properties": {
+        "attestationType": {
+          "type": "string",
+          "enum": ["sgx_dcap", "sev_snp_report", "nitro_document", "tdx_quote"],
+          "description": "TEE attestation protocol used for this batch."
+        },
+        "quoteFormat": {
+          "type": "string",
+          "enum": ["sgx_ecdsa_p256", "sgx_epid", "sev_snp_attestation_report_v2"],
+          "description": "Specific quote format for parsing by the Verification Service."
+        },
+        "mrEnclave": {
+          "type": "string",
+          "description": "SHA-256 measurement of the enclave image (MRENCLAVE). 64-character hex string.",
+          "pattern": "^[0-9a-f]{64}$"
+        },
+        "mrSigner": {
+          "type": "string",
+          "description": "SHA-256 measurement of the enclave signer key (MRSIGNER). 64-character hex string.",
+          "pattern": "^[0-9a-f]{64}$"
+        },
+        "isvProdId": {
+          "type": "integer",
+          "description": "Independent Software Vendor Product ID registered in the SGX/TEE allowlist.",
+          "minimum": 0,
+          "maximum": 65535
+        },
+        "isvSvn": {
+          "type": "integer",
+          "description": "ISV Security Version Number. Must be >= minimum SVN in revocation list.",
+          "minimum": 0,
+          "maximum": 65535
+        },
+        "reportData": {
+          "type": "string",
+          "description": "Base64-encoded 64-byte REPORTDATA field containing SHA-512 of (batchId || submissionTimestamp || batchMerkleRoot).",
+          "pattern": "^[A-Za-z0-9+/]{86}==$"
+        },
+        "attestationCertChain": {
+          "type": "array",
+          "description": "PEM-encoded X.509 certificate chain from Leaf PCK to Intel/AMD/AWS Root CA.",
+          "items": {
+            "type": "string",
+            "description": "Individual PEM certificate.",
+            "pattern": "^-----BEGIN CERTIFICATE-----"
+          },
+          "minItems": 2,
+          "maxItems": 5
+        },
+        "pckCrlDistributionPoint": {
+          "type": "string",
+          "format": "uri",
+          "description": "URL of the PCK Certificate Revocation List distribution point."
+        },
+        "clockSkewProof": {
+          "type": "object",
+          "description": "Embedded proof of TSC/NTP synchronization used for adversarial clock-skew validation.",
+          "required": ["ntpServerPool", "lastSyncOffsetNs", "syncQuality", "rdtscDriftPpmPerDay"],
+          "properties": {
+            "ntpServerPool": {
+              "type": "array",
+              "items": { "type": "string", "format": "hostname" },
+              "description": "NTP stratum-1 servers used for clock discipline.",
+              "minItems": 3
+            },
+            "lastSyncOffsetNs": {
+              "type": "integer",
+              "description": "Measured NTP offset at last sync cycle, in nanoseconds."
+            },
+            "syncQuality": {
+              "type": "string",
+              "enum": ["excellent", "good", "degraded", "alarm"],
+              "description": "NTP sync quality classification. Batches with 'alarm' status are held for manual review."
+            },
+            "rdtscDriftPpmPerDay": {
+              "type": "number",
+              "description": "Measured TSC drift in parts-per-million per day. Must be < 1.0 ppm for high-assurance batches.",
+              "maximum": 100.0
+            }
+          }
+        }
+      }
+    },
+    "voucherPayloads": {
+      "type": "array",
+      "description": "Ordered array of individual parametric indemnity vouchers. Each voucher is independently attested and merkle-included.",
+      "minItems": 1,
+      "maxItems": 100000,
+      "items": {
+        "type": "object",
+        "$ref": "#/$defs/IndemnityVoucher"
+      }
+    },
+    "batchFooter": {
+      "type": "object",
+      "description": "Integrity seals and reconciliation metadata applied after all vouchers are packed.",
+      "required": [
+        "merkleRoot",
+        "merkleAlgorithm",
+        "sha3BatchDigest",
+        "ed25519BatchSignature",
+        "signingKeyFingerprint",
+        "reconciledVoucherCount",
+        "rejectedVoucherIds",
+        "actuarialAggregates",
+        "guidewireRoutingHint"
+      ],
+      "properties": {
+        "merkleRoot": {
+          "type": "string",
+          "description": "Hex-encoded Merkle root of all serialized IndemnityVoucher objects in canonical JSON form.",
+          "pattern": "^[0-9a-f]{64}$"
+        },
+        "merkleAlgorithm": {
+          "type": "string",
+          "enum": ["sha3_256", "sha3_512", "blake3"],
+          "description": "Hash algorithm used for Merkle tree leaf and node computation."
+        },
+        "sha3BatchDigest": {
+          "type": "string",
+          "description": "SHA3-256 digest of the entire serialized batch (header + manifest + vouchers), hex-encoded.",
+          "pattern": "^[0-9a-f]{64}$"
+        },
+        "ed25519BatchSignature": {
+          "type": "string",
+          "description": "Base64-encoded Ed25519 signature over sha3BatchDigest, signed by the node's TEE-sealed private key.",
+          "pattern": "^[A-Za-z0-9+/]{86}==$"
+        },
+        "signingKeyFingerprint": {
+          "type": "string",
+          "description": "SHA-256 fingerprint of the Ed25519 public key, registered in the Institutional Key Registry.",
+          "pattern": "^[0-9a-f]{64}$"
+        },
+        "reconciledVoucherCount": {
+          "type": "integer",
+          "description": "Count of vouchers successfully packed and signed. Must equal batchHeader.batchSizeDeclaration.totalVouchers minus len(rejectedVoucherIds).",
+          "minimum": 0
+        },
+        "rejectedVoucherIds": {
+          "type": "array",
+          "description": "UUIDs of vouchers excluded from this batch due to validation failures.",
+          "items": {
+            "type": "string",
+            "format": "uuid"
+          }
+        },
+        "actuarialAggregates": {
+          "type": "object",
+          "description": "Batch-level actuarial rollup for downstream ClaimCenter STP and P-Max circuit breaker evaluation.",
+          "required": [
+            "totalGrossIndemnityUSD",
+            "averageVoucherValueUSD",
+            "p99VoucherValueUSD",
+            "maximumSingleVoucherUSD",
+            "pMaxUtilizationPercent"
+          ],
+          "properties": {
+            "totalGrossIndemnityUSD": {
+              "type": "number",
+              "description": "Sum of all accepted voucher indemnity amounts in USD.",
+              "minimum": 0
+            },
+            "averageVoucherValueUSD": {
+              "type": "number",
+              "description": "Mean indemnity value per accepted voucher.",
+              "minimum": 0
+            },
+            "p99VoucherValueUSD": {
+              "type": "number",
+              "description": "99th percentile voucher value. Used for tail-risk assessment.",
+              "minimum": 0
+            },
+            "maximumSingleVoucherUSD": {
+              "type": "number",
+              "description": "Maximum individual voucher indemnity amount.",
+              "minimum": 0
+            },
+            "pMaxUtilizationPercent": {
+              "type": "number",
+              "description": "Percentage of the P-Max solvency ceiling consumed by this batch. Exceeding 85% triggers CB review.",
+              "minimum": 0,
+              "maximum": 100
+            }
+          }
+        },
+        "guidewireRoutingHint": {
+          "type": "object",
+          "description": "Routing metadata for automated Guidewire ClaimCenter STP ingestion path selection.",
+          "required": ["targetSystem", "stpQueue", "priorityClass", "ttlSeconds"],
+          "properties": {
+            "targetSystem": {
+              "type": "string",
+              "enum": ["claimcenter_production", "claimcenter_staging", "claimcenter_dr"],
+              "description": "Guidewire ClaimCenter environment target."
+            },
+            "stpQueue": {
+              "type": "string",
+              "description": "Named STP processing queue within ClaimCenter. Must be registered in the queue registry.",
+              "pattern": "^[A-Z_]{3,32}$"
+            },
+            "priorityClass": {
+              "type": "string",
+              "enum": ["critical", "high", "standard", "bulk"],
+              "description": "Processing priority class. 'critical' batches bypass normal queue ordering."
+            },
+            "ttlSeconds": {
+              "type": "integer",
+              "description": "Time-to-live for unprocessed batches in the STP queue before escalation.",
+              "minimum": 60,
+              "maximum": 86400
+            }
+          }
+        }
+      }
+    }
+  },
+  "$defs": {
+    "IndemnityVoucher": {
+      "type": "object",
+      "description": "A single hardware-attested parametric indemnity voucher for one affected worker.",
+      "required": [
+        "voucherId",
+        "partitionIndex",
+        "claimantIdentity",
+        "disruptionEvent",
+        "parametricTrigger",
+        "indemnityCalculation",
+        "voucherAttestation",
+        "guidewireClaimHint"
+      ],
+      "properties": {
+        "voucherId": {
+          "type": "string",
+          "format": "uuid",
+          "description": "Globally unique RFC 4122 UUID v4 for this voucher. Must be unique within and across batches."
+        },
+        "partitionIndex": {
+          "type": "integer",
+          "description": "Zero-based partition index this voucher belongs to. Must be < batchHeader.batchSizeDeclaration.partitionCount.",
+          "minimum": 0
+        },
+        "claimantIdentity": {
+          "type": "object",
+          "description": "Privacy-preserving pseudonymous identity anchor for the workforce claimant.",
+          "required": ["pseudonymousId", "identityAnchorType", "gAuthTokenHash", "homogeneousGroupId"],
+          "properties": {
+            "pseudonymousId": {
+              "type": "string",
+              "description": "SHA-256 hash of the canonical government identity reference. PII is never stored in plaintext.",
+              "pattern": "^[0-9a-f]{64}$"
+            },
+            "identityAnchorType": {
+              "type": "string",
+              "enum": ["gauth_verified", "tee_biometric", "fido2_hardware_key", "smart_card_piv"],
+              "description": "Authentication mechanism used to anchor this claimant's identity."
+            },
+            "gAuthTokenHash": {
+              "type": "string",
+              "description": "SHA3-256 hash of the GAuth OAuth2 token presented at enrollment. Proves identity without storing credentials.",
+              "pattern": "^[0-9a-f]{64}$"
+            },
+            "homogeneousGroupId": {
+              "type": "string",
+              "format": "uuid",
+              "description": "K-anonymity group identifier. Claimants with identical demographic risk profiles are grouped (k >= 50)."
+            }
+          }
+        },
+        "disruptionEvent": {
+          "type": "object",
+          "description": "Specific disruption event parameters binding this voucher to a triggering incident.",
+          "required": ["eventId", "eventTimestamp", "employerEin", "terminationReason", "noticePeriodDays"],
+          "properties": {
+            "eventId": {
+              "type": "string",
+              "format": "uuid",
+              "description": "Reference to the master disruption event record in the Oracle Matrix."
+            },
+            "eventTimestamp": {
+              "type": "string",
+              "format": "date-time",
+              "description": "ISO 8601 UTC timestamp of the effective disruption date for this claimant."
+            },
+            "employerEin": {
+              "type": "string",
+              "description": "Employer Identification Number (EIN) of the terminating entity — hashed for compliance.",
+              "pattern": "^[0-9a-f]{64}$"
+            },
+            "terminationReason": {
+              "type": "string",
+              "enum": [
+                "involuntary_without_cause",
+                "plant_closure",
+                "mass_layoff_warn_act",
+                "automated_role_elimination",
+                "gig_deactivation_algorithmic",
+                "restructuring_redundancy",
+                "supply_chain_force_majeure"
+              ]
+            },
+            "noticePeriodDays": {
+              "type": "integer",
+              "description": "Advance notice days provided. Zero-notice events qualify for enhanced payout tier.",
+              "minimum": 0,
+              "maximum": 365
+            }
+          }
+        },
+        "parametricTrigger": {
+          "type": "object",
+          "description": "Oracle signal data that satisfied the parametric trigger conditions for automatic payout.",
+          "required": ["triggerDataSources", "satisfiedConditions", "triggerConfidenceScore"],
+          "properties": {
+            "triggerDataSources": {
+              "type": "array",
+              "description": "Enumeration of external data oracles contributing to trigger validation.",
+              "items": {
+                "type": "object",
+                "required": ["sourceId", "sourceType", "dataHash", "retrievedAt"],
+                "properties": {
+                  "sourceId": {
+                    "type": "string",
+                    "description": "Registered oracle source identifier."
+                  },
+                  "sourceType": {
+                    "type": "string",
+                    "enum": ["dol_mass_layoff_statistics", "warn_act_database", "ui_claims_feed", "er_data_exchange", "sentinel_edge_signal"]
+                  },
+                  "dataHash": {
+                    "type": "string",
+                    "description": "SHA3-256 of the raw oracle payload used for trigger evaluation.",
+                    "pattern": "^[0-9a-f]{64}$"
+                  },
+                  "retrievedAt": {
+                    "type": "string",
+                    "format": "date-time"
+                  }
+                }
+              },
+              "minItems": 1
+            },
+            "satisfiedConditions": {
+              "type": "array",
+              "description": "Ordered list of parametric conditions met as per the active parameter set.",
+              "items": {
+                "type": "string",
+                "description": "Condition identifier from the active parameterSet."
+              },
+              "minItems": 1
+            },
+            "triggerConfidenceScore": {
+              "type": "number",
+              "description": "Bayesian posterior probability [0.0–1.0] that the trigger conditions are genuinely met.",
+              "minimum": 0.0,
+              "maximum": 1.0
+            }
+          }
+        },
+        "indemnityCalculation": {
+          "type": "object",
+          "description": "Actuarially derived indemnity computation for this specific claimant.",
+          "required": [
+            "grossIndemnityUSD",
+            "policyLimitUSD",
+            "deductibleUSD",
+            "netIndemnityUSD",
+            "payout_tier",
+            "weeklyBenefitUSD",
+            "maxBenefitWeeks",
+            "actuarialBasisVersion"
+          ],
+          "properties": {
+            "grossIndemnityUSD": {
+              "type": "number",
+              "description": "Gross indemnity before policy limits and deductibles.",
+              "minimum": 0
+            },
+            "policyLimitUSD": {
+              "type": "number",
+              "description": "Maximum payout permitted under the active parametric policy.",
+              "minimum": 0
+            },
+            "deductibleUSD": {
+              "type": "number",
+              "description": "Per-claimant deductible applied before net calculation.",
+              "minimum": 0
+            },
+            "netIndemnityUSD": {
+              "type": "number",
+              "description": "Final net indemnity amount disbursed to claimant. = min(grossIndemnity, policyLimit) - deductible.",
+              "minimum": 0
+            },
+            "payout_tier": {
+              "type": "string",
+              "enum": ["tier_1_enhanced", "tier_2_standard", "tier_3_basic"],
+              "description": "Payout tier determined by notice period, event class, and sector."
+            },
+            "weeklyBenefitUSD": {
+              "type": "number",
+              "description": "Weekly benefit disbursement amount.",
+              "minimum": 0
+            },
+            "maxBenefitWeeks": {
+              "type": "integer",
+              "description": "Maximum number of weeks for which benefits are payable.",
+              "minimum": 1,
+              "maximum": 104
+            },
+            "actuarialBasisVersion": {
+              "type": "string",
+              "description": "Version tag of the actuarial tables and models applied in this calculation.",
+              "pattern": "^v\\d+\\.\\d+\\.\\d+$"
+            }
+          }
+        },
+        "voucherAttestation": {
+          "type": "object",
+          "description": "Per-voucher cryptographic integrity seal. Proves data was generated inside attested TEE and not tampered with post-generation.",
+          "required": ["voucherDigest", "voucherSignature", "sealedAt", "rdtscSealTs"],
+          "properties": {
+            "voucherDigest": {
+              "type": "string",
+              "description": "SHA3-256 of canonical JSON serialization of this voucher (excluding voucherAttestation field), hex-encoded.",
+              "pattern": "^[0-9a-f]{64}$"
+            },
+            "voucherSignature": {
+              "type": "string",
+              "description": "Base64-encoded Ed25519 signature over voucherDigest by the node's TEE-sealed signing key.",
+              "pattern": "^[A-Za-z0-9+/]{86}==$"
+            },
+            "sealedAt": {
+              "type": "string",
+              "format": "date-time",
+              "description": "ISO 8601 UTC timestamp when this voucher was sealed inside the TEE."
+            },
+            "rdtscSealTs": {
+              "type": "string",
+              "description": "Unsigned 64-bit TSC value at the moment of voucher sealing, as decimal string. Used for intra-batch ordering and skew analysis.",
+              "pattern": "^[0-9]+$"
+            }
+          }
+        },
+        "guidewireClaimHint": {
+          "type": "object",
+          "description": "Pre-populated metadata to accelerate ClaimCenter STP claim ingestion.",
+          "required": ["claimLineOfBusiness", "policyNumber", "coverageCode", "autoAdjudicationEligible"],
+          "properties": {
+            "claimLineOfBusiness": {
+              "type": "string",
+              "enum": ["workforce_disruption_parametric", "income_protection_group", "cyber_displacement"],
+              "description": "Line of business for ClaimCenter routing."
+            },
+            "policyNumber": {
+              "type": "string",
+              "description": "Guidewire PolicyCenter policy number under which the parametric coverage is written.",
+              "pattern": "^POL-[A-Z0-9]{8,16}$"
+            },
+            "coverageCode": {
+              "type": "string",
+              "description": "Guidewire coverage code identifying the specific parametric indemnity product.",
+              "pattern": "^[A-Z0-9_]{4,20}$"
+            },
+            "autoAdjudicationEligible": {
+              "type": "boolean",
+              "description": "Whether this voucher qualifies for fully automated STP adjudication without human review. True only if triggerConfidenceScore >= 0.97 and no high-risk flags."
+            }
+          }
+        }
+      }
+    }
+  }
+}
