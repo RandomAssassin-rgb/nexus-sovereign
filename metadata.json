@@ -1,0 +1,8 @@
+{
+  "name": "Remix: Remix: Nexus Sovereign",
+  "description": "Secure gig worker insurance platform with biometric verification.",
+  "requestFramePermissions": [
+    "camera",
+    "geolocation"
+  ]
+}
