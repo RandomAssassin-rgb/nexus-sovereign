@@ -2234,6 +2234,13 @@ async function startServer() {
     });
   }
 
+  if (process.env.NODE_ENV === "production") {
+    app.listen(PORT, "0.0.0.0", () => {
+      console.log(`Production server running on http://0.0.0.0:${PORT}`);
+    });
+    return;
+  }
+
   try {
     const serverKeyPath = path.join(process.cwd(), "certs", "server.key");
     const serverCertPath = path.join(process.cwd(), "certs", "server.cert");

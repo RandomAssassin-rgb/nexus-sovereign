@@ -11,6 +11,7 @@
     "dev:vercel": "set VITE_DISABLE_BASIC_SSL=1&& vercel dev",
     "dev:server": "tsx server_dev.ts",
     "build": "vite build",
+    "start": "tsx server_dev.ts",
     "vercel-build": "npm run build",
     "preview": "vite preview",
     "lint": "tsc --noEmit"
@@ -50,6 +51,7 @@
     "selfsigned": "^5.5.0",
     "tailwind-merge": "^3.5.0",
     "tesseract.js": "^7.0.0",
+    "tsx": "^4.21.0",
     "vite": "^6.2.0"
   },
   "devDependencies": {
@@ -62,7 +64,6 @@
     "@vitejs/plugin-basic-ssl": "^2.3.0",
     "autoprefixer": "^10.4.21",
     "tailwindcss": "^4.1.14",
-    "tsx": "^4.21.0",
     "typescript": "~5.8.2",
     "vercel": "^50.11.0",
     "vite": "^6.2.0"
