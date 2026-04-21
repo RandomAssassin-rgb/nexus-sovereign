@@ -13,10 +13,12 @@ import {
   Clock,
   DollarSign,
   TrendingUp,
-  Filter,
+  GitBranch,
+  ChevronDown,
+  ChevronUp,
 } from 'lucide-react';
 import AdminLayout from '../components/AdminLayout';
-import axios from 'axios';
+import { apiClient } from '../lib/apiClient';
 
 interface PayoutRecord {
   id: string;
@@ -25,7 +27,30 @@ interface PayoutRecord {
   trigger_type: string;
   status: string;
   created_at: string;
+  verdict?: string;
+  reason_codes?: string[];
 }
+
+interface ReasoningStep {
+  step: string;
+  value: string;
+  detail?: string;
+}
+
+interface PayoutTrace {
+  claim_id: string;
+  payout_amount: number;
+  trigger: string;
+  steps: ReasoningStep[];
+  summary: string;
+  verdict?: string;
+  reason_codes?: string[];
+}
+
+function formatCurrency(amount: number) {
+  return `Rs ${Math.round(Number(amount || 0)).toLocaleString('en-IN')}`;
+}
+
 
 export default function AdminPayouts() {
   const [isSimulateModalOpen, setIsSimulateModalOpen] = useState(false);
@@ -34,19 +59,30 @@ export default function AdminPayouts() {
   const [simulationResult, setSimulationResult] = useState<any>(null);
   const [payouts, setPayouts] = useState<PayoutRecord[]>([]);
   const [filter, setFilter] = useState<string>('all');
+  const [opsFreshness, setOpsFreshness] = useState<any>(null);
+  const [expandedRows, setExpandedRows] = useState<Set<string>>(new Set());
+  const [traceCache, setTraceCache] = useState<Record<string, PayoutTrace | null>>({});
+  const [traceLoading, setTraceLoading] = useState<Set<string>>(new Set());
+  const [resolvingId, setResolvingId] = useState<string | null>(null);
+  const [resolutionStatus, setResolutionStatus] = useState<'approved' | 'rejected' | null>(null);
+  const [resolutionReason, setResolutionReason] = useState('');
+  const [isSubmittingResolution, setIsSubmittingResolution] = useState(false);
 
-  // Fetch recent payouts
   useEffect(() => {
     const fetchPayouts = async () => {
       try {
-        const res = await axios.get('/api/admin/recent-claims');
-        setPayouts(res.data || []);
+        const [payoutRes, opsRes] = await Promise.all([
+          apiClient.get('/api/admin/recent-claims'),
+          apiClient.get('/api/admin/ops-freshness').catch(() => ({ data: null })),
+        ]);
+        setPayouts(payoutRes.data || []);
+        setOpsFreshness(opsRes.data);
       } catch (e) {
         console.warn('Failed to fetch payouts', e);
       }
     };
-    fetchPayouts();
-    const interval = setInterval(fetchPayouts, 30000);
+    void fetchPayouts();
+    const interval = setInterval(() => void fetchPayouts(), 30000);
     return () => clearInterval(interval);
   }, []);
 
@@ -55,8 +91,14 @@ export default function AdminPayouts() {
     setIsSimulating(true);
     setSimulationResult(null);
     try {
-      const response = await axios.post('/api/admin/simulate', { type: simulationType });
-      setSimulationResult(response.data);
+      const response = await apiClient.post('/api/admin/simulate', { type: simulationType });
+      setSimulationResult({
+        ...response.data,
+        count: Number(response.data?.count ?? 0),
+      });
+      window.setTimeout(() => {
+        void apiClient.get('/api/admin/recent-claims').then((res) => setPayouts(res.data || [])).catch(() => {});
+      }, 1200);
     } catch (err: any) {
       console.error('Failed to simulate', err);
       alert('Simulation failed: ' + (err.response?.data?.error || err.message));
@@ -71,80 +113,113 @@ export default function AdminPayouts() {
     setSimulationResult(null);
   };
 
-  // Mock summary data (will be replaced by actual API once stats endpoint supports payout-specific data)
+  const totalDisbursed = payouts.reduce((sum, payout) => sum + Number(payout.amount || 0), 0);
+
+  const toggleRow = async (id: string) => {
+    const next = new Set(expandedRows);
+    if (next.has(id)) {
+      next.delete(id);
+    } else {
+      next.add(id);
+      if (!(id in traceCache)) {
+        setTraceLoading((prev) => new Set(prev).add(id));
+        try {
+          const res = await apiClient.get(`/api/claims/explain/${id}`);
+          setTraceCache((prev) => ({ ...prev, [id]: res.data || null }));
+        } catch {
+          setTraceCache((prev) => ({ ...prev, [id]: null }));
+        } finally {
+          setTraceLoading((prev) => { const s = new Set(prev); s.delete(id); return s; });
+        }
+      }
+    }
+    setExpandedRows(next);
+  };
+
+  const submitResolution = async () => {
+    if (!resolvingId || !resolutionStatus) return;
+    setIsSubmittingResolution(true);
+    try {
+      await apiClient.post('/api/admin/claim/resolve', {
+        claimId: resolvingId,
+        resolution: resolutionStatus,
+        reason: resolutionReason
+      });
+      // Refresh list
+      const res = await apiClient.get('/api/admin/recent-claims');
+      setPayouts(res.data || []);
+      setResolvingId(null);
+      setResolutionStatus(null);
+      setResolutionReason('');
+    } catch (err: any) {
+      alert('Failed to resolve claim: ' + (err.response?.data?.error || err.message));
+    } finally {
+      setIsSubmittingResolution(false);
+    }
+  };
+
   const summaryCards = [
     {
       title: 'Total Disbursed',
-      value: '₹28,54,000',
-      change: '+18.2%',
+      value: formatCurrency(totalDisbursed),
+      change: `${payouts.length} releases`,
       positive: true,
       icon: DollarSign,
       color: 'text-emerald-500 bg-emerald-500/10',
     },
     {
       title: 'Payouts Today',
-      value: '142',
-      change: '+24',
+      value: String(payouts.length),
+      change: `${opsFreshness?.summary?.healthy_services ?? 0} rails healthy`,
       positive: true,
       icon: Send,
       color: 'text-primary bg-primary/10',
     },
     {
       title: 'Avg. Processing Time',
-      value: '2.4s',
-      change: '-0.8s',
+      value: `${opsFreshness?.rails?.avg_release_seconds ?? 0}s`,
+      change: opsFreshness?.summary?.overall_posture || 'stable',
       positive: true,
       icon: Clock,
       color: 'text-blue-500 bg-blue-500/10',
     },
     {
       title: 'Success Rate',
-      value: '99.7%',
-      change: '+0.2%',
+      value: `${opsFreshness?.rails?.payout_success_rate ?? 0}%`,
+      change: `${opsFreshness?.rails?.straight_through_pct ?? 0}% straight-through`,
       positive: true,
       icon: TrendingUp,
       color: 'text-violet-500 bg-violet-500/10',
     },
   ];
 
-  const activePayouts: PayoutRecord[] = payouts;
-  const statusColor: Record<string, string> = {
-    completed: 'bg-emerald-500/10 text-emerald-600 border-emerald-500/20',
-    processing: 'bg-amber-500/10 text-amber-600 border-amber-500/20',
-    failed: 'bg-red-500/10 text-red-600 border-red-500/20',
-  };
-
-  const triggerColor: Record<string, string> = {
-    'Heavy Rain/Flood': 'text-blue-500',
-    'Extreme Heat': 'text-amber-500',
-    'Platform Outage': 'text-red-500',
-    'Severe Pollution': 'text-purple-500',
-    'Civic Disruption': 'text-indigo-500',
-  };
+  const filteredPayouts = payouts.filter((p) => filter === 'all' || p.status === filter);
 
   return (
-    <AdminLayout
-      pageTitle="Payouts"
-      onSimulateClick={() => setIsSimulateModalOpen(true)}
-    >
+    <AdminLayout pageTitle="Payouts" onSimulateClick={() => setIsSimulateModalOpen(true)}>
+      <section className="nexus-section-stack">
+        <div className="nexus-section-heading">
+          <div>
+            <div className="nexus-section-eyebrow mb-2">Payout operations</div>
+            <h1 className="nexus-section-title">Release, inspect, and trace every settlement cycle.</h1>
+          </div>
+          <p className="nexus-section-copy">
+            Track recent disbursements, processing latency, and event-level payout behavior across the live reserve network. Click any row to inspect its full reasoning trace.
+          </p>
+        </div>
+      </section>
+
       {/* Summary Cards */}
       <div className="grid grid-cols-1 md:grid-cols-4 gap-6">
         {summaryCards.map((card, i) => {
           const Icon = card.icon;
           return (
-            <div
-              key={i}
-              className="bg-card rounded-2xl p-6 shadow-sm border border-border/50 relative overflow-hidden group hover:border-primary/30 transition-all duration-300"
-            >
+            <div key={i} className="nexus-kpi-card">
               <div className="absolute -right-4 -top-4 w-24 h-24 bg-primary/5 rounded-full transition-transform group-hover:scale-150 duration-500 opacity-50 z-0" />
               <div className="relative z-10 flex items-start justify-between">
                 <div>
-                  <p className="text-xs font-bold text-muted-foreground uppercase tracking-wider mb-2">
-                    {card.title}
-                  </p>
-                  <p className="text-3xl font-black text-foreground tracking-tight">
-                    {card.value}
-                  </p>
+                  <p className="text-xs font-bold text-muted-foreground uppercase tracking-wider mb-2">{card.title}</p>
+                  <p className="text-3xl font-black text-foreground tracking-tight">{card.value}</p>
                   <div className={`flex items-center gap-1 mt-3 text-sm font-semibold ${card.positive ? 'text-emerald-600' : 'text-red-500'}`}>
                     {card.positive ? <ArrowUpRight size={14} /> : <ArrowDownRight size={14} />}
                     {card.change}
@@ -159,33 +234,34 @@ export default function AdminPayouts() {
         })}
       </div>
 
-      {/* Payouts Table */}
-      <div className="bg-card rounded-2xl shadow-sm border border-border/50 overflow-hidden">
-        <div className="px-6 py-4 border-b border-border/50 flex items-center justify-between bg-secondary/20">
-          <h2 className="font-bold text-lg text-foreground flex items-center gap-2">
-            <Send size={20} className="text-primary" /> Recent Payouts
-          </h2>
-          <div className="flex items-center gap-3">
-            <div className="flex items-center gap-1.5 bg-secondary/50 rounded-lg p-1">
-              {['all', 'completed', 'processing', 'failed'].map((f) => (
-                <button
-                  key={f}
-                  onClick={() => setFilter(f)}
-                  className={`px-3 py-1.5 rounded-md text-xs font-bold uppercase tracking-wider transition-all ${
-                    filter === f
-                      ? 'bg-card text-foreground shadow-sm'
-                      : 'text-muted-foreground hover:text-foreground'
-                  }`}
-                >
-                  {f}
-                </button>
-              ))}
-            </div>
+      {/* Payouts Table with expandable trace */}
+      <div className="nexus-table-shell">
+        <div className="nexus-table-toolbar">
+          <div>
+            <h2 className="font-bold text-lg text-foreground flex items-center gap-2">
+              <Send size={20} className="text-primary" /> Recent Payouts
+            </h2>
+            <p className="mt-1 text-xs text-muted-foreground">
+              Click any row to expand its full payout reasoning trace.
+            </p>
+          </div>
+          <div className="flex items-center gap-1.5 bg-secondary/50 rounded-lg p-1">
+            {['all', 'completed', 'processing', 'failed'].map((f) => (
+              <button
+                key={f}
+                onClick={() => setFilter(f)}
+                className={`px-3 py-1.5 rounded-md text-xs font-bold uppercase tracking-wider transition-all ${
+                  filter === f ? 'bg-card text-foreground shadow-sm' : 'text-muted-foreground hover:text-foreground'
+                }`}
+              >
+                {f}
+              </button>
+            ))}
           </div>
         </div>
 
         <div className="overflow-x-auto">
-          <table className="w-full">
+          <table className="nexus-data-table">
             <thead>
               <tr className="border-b border-border/50">
                 <th className="text-left px-6 py-3 text-[10px] font-bold text-muted-foreground uppercase tracking-wider">Payout ID</th>
@@ -194,32 +270,144 @@ export default function AdminPayouts() {
                 <th className="text-right px-6 py-3 text-[10px] font-bold text-muted-foreground uppercase tracking-wider">Amount</th>
                 <th className="text-center px-6 py-3 text-[10px] font-bold text-muted-foreground uppercase tracking-wider">Status</th>
                 <th className="text-right px-6 py-3 text-[10px] font-bold text-muted-foreground uppercase tracking-wider">Time</th>
+                <th className="text-center px-6 py-3 text-[10px] font-bold text-muted-foreground uppercase tracking-wider">Trace</th>
               </tr>
             </thead>
             <tbody>
-              {activePayouts
-                .filter((p) => filter === 'all' || p.status === filter)
-                .map((payout, i) => (
-                  <tr
-                    key={payout.id}
-                    className="border-b border-border/30 hover:bg-secondary/30 transition-colors cursor-pointer"
-                  >
-                    <td className="px-6 py-4 text-sm font-bold text-foreground">{payout.id}</td>
-                    <td className="px-6 py-4 text-sm font-medium text-foreground">{payout.worker_name}</td>
-                    <td className="px-6 py-4">
-                      <span className={`text-sm font-semibold ${triggerColor[payout.trigger_type] || 'text-foreground'}`}>
-                        {payout.trigger_type}
-                      </span>
-                    </td>
-                    <td className="px-6 py-4 text-right text-sm font-bold text-foreground">₹{payout.amount}</td>
-                    <td className="px-6 py-4 text-center">
-                      <span className={`inline-block px-2.5 py-1 text-[10px] font-bold uppercase tracking-wider rounded-full border ${statusColor[payout.status] || 'bg-secondary text-foreground'}`}>
-                        {payout.status}
-                      </span>
-                    </td>
-                    <td className="px-6 py-4 text-right text-xs text-muted-foreground font-medium">{payout.created_at}</td>
-                  </tr>
-                ))}
+              {filteredPayouts.map((payout) => {
+                const isExpanded = expandedRows.has(payout.id);
+                const isLoadingTrace = traceLoading.has(payout.id);
+                const trace = traceCache[payout.id] ?? null;
+                return (
+                  <React.Fragment key={payout.id}>
+                    <tr
+                      className="border-b border-border/30 hover:bg-secondary/30 transition-colors cursor-pointer"
+                      onClick={() => void toggleRow(payout.id)}
+                    >
+                      <td className="px-6 py-4 text-sm font-bold text-foreground">{payout.id}</td>
+                      <td className="px-6 py-4 text-sm font-medium text-foreground">{payout.worker_name}</td>
+                      <td className="px-6 py-4">
+                        <span className={`text-sm font-semibold ${{ 'Heavy Rain/Flood': 'text-blue-500', 'Extreme Heat': 'text-amber-500', 'Platform Outage': 'text-red-500', 'Severe Pollution': 'text-purple-500', 'Civic Disruption': 'text-indigo-500' }[payout.trigger_type] || 'text-foreground'}`}>
+                          {payout.trigger_type}
+                        </span>
+                      </td>
+                      <td className="px-6 py-4 text-right text-sm font-bold text-foreground">{formatCurrency(payout.amount)}</td>
+                      <td className="px-6 py-4 text-center">
+                        <span className={`inline-block px-2.5 py-1 text-[10px] font-bold uppercase tracking-wider rounded-full border ${{ completed: 'bg-emerald-500/10 text-emerald-600 border-emerald-500/20', processing: 'bg-amber-500/10 text-amber-600 border-amber-500/20', failed: 'bg-red-500/10 text-red-600 border-red-500/20' }[payout.status] || 'bg-secondary text-foreground'}`}>
+                          {payout.status}
+                        </span>
+                      </td>
+                      <td className="px-6 py-4 text-right text-xs text-muted-foreground font-medium">{payout.created_at}</td>
+                      <td className="px-6 py-4 text-center">
+                        <button className="text-muted-foreground hover:text-primary transition-colors">
+                          {isExpanded ? <ChevronUp size={16} /> : <ChevronDown size={16} />}
+                        </button>
+                      </td>
+                    </tr>
+                    {isExpanded && (
+                      <tr className="border-b border-border/30 bg-secondary/10">
+                        <td colSpan={7} className="px-6 py-5">
+                          {isLoadingTrace ? (
+                            <div className="flex items-center gap-3 text-sm text-muted-foreground">
+                              <div className="w-5 h-5 border-2 border-primary/30 border-t-primary rounded-full animate-spin" />
+                              Fetching payout reasoning trace...
+                            </div>
+                          ) : trace ? (
+                            <div>
+                              <div className="flex items-center gap-2 mb-4">
+                                <GitBranch size={15} className="text-primary" />
+                                <span className="text-sm font-bold text-foreground">Payout reasoning trace</span>
+                                <span className="ml-auto text-xs font-medium text-muted-foreground">{trace.summary}</span>
+                              </div>
+                            <div className="grid gap-6 lg:grid-cols-[1fr_300px]">
+                              <div className="relative">
+                                <div className="absolute left-[15px] top-0 bottom-0 w-px bg-border/40" />
+                                <div className="space-y-3">
+                                  {(trace.steps || []).map((step, idx) => (
+                                    <div key={idx} className="relative flex gap-4">
+                                      <div className="relative z-10 mt-1.5 h-[8px] w-[8px] flex-shrink-0 rounded-full bg-primary/70" />
+                                      <div className="flex-1 rounded-xl border border-border/40 bg-card/60 px-4 py-3">
+                                        <div className="flex items-center justify-between gap-3">
+                                          <span className="text-xs font-bold uppercase tracking-[0.16em] text-muted-foreground">{step.step}</span>
+                                          <span className="text-sm font-black text-primary tracking-tight">{step.value}</span>
+                                        </div>
+                                        {step.detail && <p className="mt-1.5 text-xs leading-5 text-muted-foreground">{step.detail}</p>}
+                                      </div>
+                                    </div>
+                                  ))}
+                                </div>
+                              </div>
+
+                              {/* Truth Matrix Sidebar */}
+                              <div className="space-y-4">
+                                <div className="rounded-2xl border border-primary/20 bg-primary/5 p-4">
+                                  <div className="flex items-center justify-between mb-3">
+                                    <span className="text-[10px] font-black uppercase tracking-widest text-primary">Truth Profile</span>
+                                    <span className={`px-2 py-0.5 rounded text-[9px] font-black uppercase tracking-widest ${
+                                      trace.verdict === 'auto-approve' ? 'bg-emerald-500/10 text-emerald-500' : 
+                                      trace.verdict === 'hold' ? 'bg-amber-500/10 text-amber-500' : 'bg-red-500/10 text-red-500'
+                                    }`}>
+                                      {trace.verdict || 'Processing'}
+                                    </span>
+                                  </div>
+                                  
+                                  <div className="space-y-2.5">
+                                    {trace.reason_codes?.map((code, idx) => (
+                                      <div key={idx} className="flex items-center gap-2 text-[10px] font-bold text-foreground">
+                                        <div className="h-1 w-1 rounded-full bg-primary" />
+                                        {code}
+                                      </div>
+                                    ))}
+                                    {(!trace.reason_codes || trace.reason_codes.length === 0) && (
+                                      <div className="text-[10px] italic text-muted-foreground">No anomalies detected</div>
+                                    )}
+                                  </div>
+                                </div>
+
+                                  <button 
+                                    className="w-full py-2.5 rounded-xl bg-secondary/50 border border-border/40 text-[10px] font-black uppercase tracking-widest text-muted-foreground hover:bg-secondary hover:text-foreground transition-all flex items-center justify-center gap-2"
+                                    onClick={() => window.open(`/jep/${payout.id}`, '_blank')}
+                                  >
+                                    <ArrowUpRight size={12} />
+                                    View Public JEP
+                                  </button>
+
+                                  {(payout.status === 'failed' || payout.status === 'processing') && (
+                                    <button 
+                                      className="w-full py-2.5 rounded-xl bg-primary/10 border border-primary/20 text-[10px] font-black uppercase tracking-widest text-primary hover:bg-primary hover:text-white transition-all flex items-center justify-center gap-2"
+                                      onClick={(e) => {
+                                        e.stopPropagation();
+                                        setResolvingId(payout.id);
+                                      }}
+                                    >
+                                      <Activity size={12} />
+                                      Process Exception
+                                    </button>
+                                  )}
+                                </div>
+                              </div>
+                            </div>
+                          ) : (
+                            <div className="flex items-center gap-2 text-sm text-muted-foreground">
+                              <GitBranch size={14} />
+                              No reasoning trace available for this payout record yet.
+                            </div>
+                          )}
+                        </td>
+                      </tr>
+                    )}
+                  </React.Fragment>
+                );
+              })}
+
+
+              {filteredPayouts.length === 0 && (
+                <tr>
+                  <td colSpan={7} className="px-6 py-12 text-center text-sm text-muted-foreground">
+                    No payout records match this filter.
+                  </td>
+                </tr>
+              )}
             </tbody>
           </table>
         </div>
@@ -273,7 +461,7 @@ export default function AdminPayouts() {
                             value={option.id}
                             checked={simulationType === option.id}
                             onChange={(e) => setSimulationType(e.target.value)}
-                            className="h-4 w-4 text-primary border-zinc-300 focus:ring-violet-500"
+                            className="h-4 w-4 text-primary border-zinc-300"
                           />
                         </div>
                         <div className="ml-3 flex gap-3">
@@ -298,7 +486,7 @@ export default function AdminPayouts() {
                       Cancel
                     </button>
                     <button
-                      onClick={triggerSimulation}
+                      onClick={() => void triggerSimulation()}
                       disabled={!simulationType || isSimulating}
                       className="flex-1 px-4 py-3 bg-primary hover:bg-primary/90 text-white font-bold rounded-xl shadow-md transition-colors disabled:opacity-50 flex justify-center items-center gap-2"
                     >
@@ -322,16 +510,72 @@ export default function AdminPayouts() {
                   <p className="text-sm font-medium text-muted-foreground mb-6">
                     Successfully injected <strong>{simulationType}</strong> anomaly.
                     <br />
-                    {simulationResult.count} worker(s) just received a zero-touch payout.
+                    {simulationResult.count} worker(s) {simulationResult.queued ? 'were queued into' : 'just received'} the zero-touch payout rail.
                   </p>
                   <button
                     onClick={closeSimulationModal}
-                    className="w-full px-4 py-3 bg-card hover:bg-zinc-800 text-white font-bold rounded-xl transition-colors"
+                    className="w-full px-4 py-3 bg-primary hover:bg-primary/90 text-white font-bold rounded-xl transition-colors"
                   >
                     Done
                   </button>
                 </div>
               )}
+            </div>
+          </div>
+        </div>
+      )}
+      {/* Resolution Modal */}
+      {resolvingId && (
+        <div className="fixed inset-0 z-[60] flex items-center justify-center p-4 bg-black/60 backdrop-blur-md">
+          <div className="bg-card rounded-3xl max-w-md w-full overflow-hidden shadow-2xl border border-border/50">
+            <div className="px-6 py-5 border-b border-border/50 bg-secondary/30">
+              <h2 className="text-xl font-bold flex items-center gap-2">
+                <AlertTriangle className="text-primary" /> Resolve Exception
+              </h2>
+              <p className="text-[10px] uppercase font-black text-muted-foreground tracking-widest mt-1">Claim ID: {resolvingId}</p>
+            </div>
+            
+            <div className="p-6 space-y-4">
+              <div className="grid grid-cols-2 gap-3">
+                <button 
+                  onClick={() => setResolutionStatus('approved')}
+                  className={`py-3 rounded-xl border-2 font-bold transition-all ${resolutionStatus === 'approved' ? 'border-emerald-500 bg-emerald-500/10 text-emerald-500' : 'border-border/50 text-muted-foreground'}`}
+                >
+                  Approve
+                </button>
+                <button 
+                  onClick={() => setResolutionStatus('rejected')}
+                  className={`py-3 rounded-xl border-2 font-bold transition-all ${resolutionStatus === 'rejected' ? 'border-red-500 bg-red-500/10 text-red-500' : 'border-border/50 text-muted-foreground'}`}
+                >
+                  Reject
+                </button>
+              </div>
+
+              <div>
+                <label className="text-[10px] font-black uppercase text-muted-foreground tracking-widest mb-1.5 block">Resolution Note</label>
+                <textarea 
+                  value={resolutionReason}
+                  onChange={(e) => setResolutionReason(e.target.value)}
+                  placeholder="Explain why this exception is being manually resolved..."
+                  className="w-full bg-secondary/30 border border-border/50 rounded-xl p-3 text-sm focus:outline-none focus:border-primary/50 min-h-[100px]"
+                />
+              </div>
+
+              <div className="flex gap-3 pt-2">
+                <button 
+                  onClick={() => setResolvingId(null)}
+                  className="flex-1 py-3 bg-secondary hover:bg-secondary/80 text-foreground font-bold rounded-xl transition-all"
+                >
+                  Cancel
+                </button>
+                <button 
+                  onClick={submitResolution}
+                  disabled={!resolutionStatus || isSubmittingResolution}
+                  className="flex-1 py-3 bg-primary hover:bg-primary/90 text-white font-bold rounded-xl transition-all disabled:opacity-50"
+                >
+                  {isSubmittingResolution ? 'Processing...' : 'Submit Resolution'}
+                </button>
+              </div>
             </div>
           </div>
         </div>

@@ -111,23 +111,37 @@ export default function Coverage() {
   }, [location, mapboxToken]);
 
   return (
-    <div className="min-h-full bg-background flex flex-col">
-      <header className="flex items-center justify-between p-4 border-b border-border/10 sticky top-0 bg-background/95 backdrop-blur-md z-40">
-        <h1 className="font-bold tracking-tight text-xl">Coverage Map</h1>
+    <div className="min-h-full flex flex-col">
+      <header className="nexus-page-header">
+        <div>
+          <div className="nexus-section-eyebrow mb-2">Coverage intelligence</div>
+          <h1 className="nexus-page-title">Coverage map</h1>
+        </div>
         <div className="flex items-center gap-2">
-          <button className="p-2 hover:bg-secondary rounded-full">
+          <button className="nexus-icon-button">
             <Info size={20} />
           </button>
           <NotificationBell />
         </div>
       </header>
 
-      <main className="flex-1 p-4 space-y-6">
+      <main className="nexus-app-main space-y-6 pb-8">
+        <section className="nexus-section-stack">
+          <div className="nexus-section-heading">
+            <div>
+              <h2 className="nexus-section-title">Hyperlocal protection mapped to where you actually work.</h2>
+            </div>
+            <p className="nexus-section-copy">
+              Inspect live zone posture, active policy terms, and event payout bands across weather, AQI, outage, and civic disruption triggers.
+            </p>
+          </div>
+        </section>
+
         {/* Map Visualization */}
         <motion.div
           initial={{ opacity: 0, scale: 0.95 }}
           animate={{ opacity: 1, scale: 1 }}
-          className="relative h-64 rounded-3xl overflow-hidden border border-border/50 shadow-sm bg-secondary/20"
+          className="nexus-panel-hero relative h-[18rem] overflow-hidden bg-secondary/20 md:h-[24rem]"
         >
           {mapboxToken && mapboxToken !== 'placeholder_mapbox_token' && location ? (
             <Map
@@ -175,25 +189,30 @@ export default function Coverage() {
           <motion.div
             initial={{ opacity: 0, height: 0 }}
             animate={{ opacity: 1, height: "auto" }}
-            className="bg-destructive/5 border border-destructive/20 rounded-2xl p-4"
+            className="nexus-panel rounded-2xl border-destructive/20 bg-destructive/5 p-4"
           >
             <div className="flex items-start gap-3">
               <AlertTriangle className="text-destructive shrink-0 mt-0.5" size={18} />
               <div>
                 <h4 className="font-bold text-sm text-destructive mb-1">Micro-Topographical Risk Detected</h4>
                 <p className="text-xs text-muted-foreground leading-relaxed">
-                  Elevation-weighted flood velocity vectors indicate a 14% higher risk on your current route. Premium adjusted by +₹0.40.
+                  Elevation-weighted flood velocity vectors indicate a 14% higher risk on your current route. Premium adjusted by +Rs 0.40.
                 </p>
               </div>
             </div>
           </motion.div>
         )}
 
-        {/* Policy Details */}
-        <div className="space-y-4">
-          <h3 className="font-bold text-lg">Active Policy</h3>
-          
-          <div className="bg-card border border-border/50 rounded-3xl p-5 shadow-sm">
+        <div className="grid gap-6 xl:grid-cols-[0.84fr_1.16fr]">
+          <section className="nexus-section-stack">
+            <div className="nexus-section-heading">
+              <div>
+                <div className="nexus-section-eyebrow">Policy layer</div>
+                <h3 className="nexus-section-title text-[1.8rem]">Active policy</h3>
+              </div>
+            </div>
+
+            <div className="nexus-panel p-5 md:p-6">
             <div className="flex justify-between items-start mb-6">
               <div>
                 <h4 className="font-bold text-xl mb-1">Sovereign Shield</h4>
@@ -217,101 +236,105 @@ export default function Coverage() {
                 <span className="text-sm text-muted-foreground">Coverage Area</span>
                 <span className="font-bold">{zoneName}</span>
               </div>
-              <div className="bg-amber-500/10 border border-amber-500/20 rounded-xl p-3">
+              <div className="rounded-2xl border border-amber-500/20 bg-amber-500/10 p-4">
                 <p className="text-xs text-amber-600 font-medium">
                   <span className="font-bold">Lockout Policy:</span> If weekly premium payments are stopped or cancelled before the 3-month term ends, you cannot purchase a new policy until the original 3-month period has elapsed.
                 </p>
               </div>
             </div>
-          </div>
-        </div>
+            </div>
+          </section>
 
-        {/* Coverage Limits */}
-        <div className="space-y-4 mb-6">
-          <h3 className="font-bold text-lg">Parametric Coverage Limits</h3>
-          
-          <div className="grid grid-cols-2 gap-4">
+          <section className="nexus-section-stack">
+            <div className="nexus-section-heading">
+              <div>
+                <div className="nexus-section-eyebrow">Actuarial payout bands</div>
+                <h3 className="nexus-section-title text-[1.8rem]">Parametric coverage limits</h3>
+              </div>
+            </div>
+
+            <div className="grid grid-cols-1 gap-4 md:grid-cols-2">
             {/* Card 1 — Heavy Rain / Flood */}
-            <div className="bg-card border border-border/50 rounded-2xl p-4 shadow-sm">
+            <div className="nexus-panel rounded-2xl p-4">
               <div className="flex items-center gap-2 mb-2">
                 <CloudRain size={16} className="text-blue-500" />
                 <span className="text-xs font-bold text-muted-foreground uppercase tracking-wider">Heavy Rain / Flood</span>
               </div>
-              <p className="text-lg font-bold">₹159 – ₹364</p>
+              <p className="text-lg font-bold">Rs 159 - Rs 364</p>
               <p className="text-[10px] text-muted-foreground font-medium">per event</p>
               <div className="mt-3 space-y-1.5">
                 <p className="text-[10px] text-muted-foreground"><span className="font-bold text-foreground">Trigger:</span> Rainfall &gt;25mm/hr in your zone</p>
                 <p className="text-[10px] text-muted-foreground"><span className="font-bold text-foreground">Duration:</span> Active disruption period</p>
-                <p className="text-[10px] text-muted-foreground italic">Based on declared earnings × hours affected</p>
+                <p className="text-[10px] text-muted-foreground italic">Based on declared earnings x hours affected</p>
               </div>
             </div>
 
             {/* Card 2 — Extreme Heat */}
-            <div className="bg-card border border-border/50 rounded-2xl p-4 shadow-sm">
+            <div className="nexus-panel rounded-2xl p-4">
               <div className="flex items-center gap-2 mb-2">
                 <ThermometerSun size={16} className="text-amber-500" />
                 <span className="text-xs font-bold text-muted-foreground uppercase tracking-wider">Extreme Heat</span>
               </div>
-              <p className="text-lg font-bold">₹140 – ₹290</p>
+              <p className="text-lg font-bold">Rs 140 - Rs 290</p>
               <p className="text-[10px] text-muted-foreground font-medium">per event</p>
               <div className="mt-3 space-y-1.5">
-                <p className="text-[10px] text-muted-foreground"><span className="font-bold text-foreground">Trigger:</span> Temperature &gt;42°C during shift</p>
+                <p className="text-[10px] text-muted-foreground"><span className="font-bold text-foreground">Trigger:</span> Temperature &gt;42C during shift</p>
                 <p className="text-[10px] text-muted-foreground"><span className="font-bold text-foreground">Duration:</span> Active heat advisory period</p>
-                <p className="text-[10px] text-muted-foreground italic">Based on declared earnings × hours affected</p>
+                <p className="text-[10px] text-muted-foreground italic">Based on declared earnings x hours affected</p>
               </div>
             </div>
 
             {/* Card 3 — Platform Outage */}
-            <div className="bg-card border border-border/50 rounded-2xl p-4 shadow-sm">
+            <div className="nexus-panel rounded-2xl p-4">
               <div className="flex items-center gap-2 mb-2">
                 <ServerCrash size={16} className="text-purple-500" />
                 <span className="text-xs font-bold text-muted-foreground uppercase tracking-wider">Platform Outage</span>
               </div>
-              <p className="text-lg font-bold">₹68 – ₹140</p>
+              <p className="text-lg font-bold">Rs 68 - Rs 140</p>
               <p className="text-[10px] text-muted-foreground font-medium">per event</p>
               <div className="mt-3 space-y-1.5">
                 <p className="text-[10px] text-muted-foreground"><span className="font-bold text-foreground">Trigger:</span> Order rate drop &gt;80% for 45+ min</p>
                 <p className="text-[10px] text-muted-foreground"><span className="font-bold text-foreground">Duration:</span> Active outage window</p>
-                <p className="text-[10px] text-muted-foreground italic">Based on declared earnings × hours affected</p>
+                <p className="text-[10px] text-muted-foreground italic">Based on declared earnings x hours affected</p>
               </div>
             </div>
 
             {/* Card 4 — Severe Pollution */}
-            <div className="bg-card border border-border/50 rounded-2xl p-4 shadow-sm">
+            <div className="nexus-panel rounded-2xl p-4">
               <div className="flex items-center gap-2 mb-2">
                 <Wind size={16} className="text-rose-500" />
                 <span className="text-xs font-bold text-muted-foreground uppercase tracking-wider">Severe Pollution</span>
               </div>
-              <p className="text-lg font-bold">₹180 – ₹380</p>
+              <p className="text-lg font-bold">Rs 180 - Rs 380</p>
               <p className="text-[10px] text-muted-foreground font-medium">per event</p>
               <div className="mt-3 space-y-1.5">
                 <p className="text-[10px] text-muted-foreground"><span className="font-bold text-foreground">Trigger:</span> AQI &gt;300 (Hazardous) in zone</p>
                 <p className="text-[10px] text-muted-foreground"><span className="font-bold text-foreground">Duration:</span> Active AQI advisory period</p>
-                <p className="text-[10px] text-muted-foreground italic">Based on declared earnings × hours affected</p>
+                <p className="text-[10px] text-muted-foreground italic">Based on declared earnings x hours affected</p>
               </div>
             </div>
 
             {/* Card 5 — Civic Disruption */}
-            <div className="bg-card border border-border/50 rounded-2xl p-4 shadow-sm col-span-2">
+            <div className="nexus-panel rounded-2xl p-4 md:col-span-2">
               <div className="flex items-center gap-2 mb-2">
                 <Megaphone size={16} className="text-orange-500" />
                 <span className="text-xs font-bold text-muted-foreground uppercase tracking-wider">Civic Disruption</span>
               </div>
-              <p className="text-lg font-bold">₹159 – ₹320</p>
+              <p className="text-lg font-bold">Rs 159 - Rs 320</p>
               <p className="text-[10px] text-muted-foreground font-medium">per event</p>
               <div className="mt-3 space-y-1.5">
                 <p className="text-[10px] text-muted-foreground"><span className="font-bold text-foreground">Trigger:</span> Confirmed bandh, curfew, or strike in zone</p>
                 <p className="text-[10px] text-muted-foreground"><span className="font-bold text-foreground">Duration:</span> Active disruption window</p>
-                <p className="text-[10px] text-muted-foreground italic">Based on declared earnings × hours affected</p>
+                <p className="text-[10px] text-muted-foreground italic">Based on declared earnings x hours affected</p>
               </div>
             </div>
           </div>
 
-          <p className="mt-4 text-[11px] text-muted-foreground leading-relaxed italic border-l-2 border-primary/20 pl-3">
+            <p className="text-[11px] text-muted-foreground leading-relaxed italic border-l-2 border-primary/20 pl-3">
             <span className="font-bold text-primary opacity-80 underline underline-offset-4 decoration-primary/30">Actuarial Note:</span> Actual payout calculated by <span className="text-foreground font-medium">Pmax formula</span> based on your declared earnings, disruption duration, and current reserve pool. See your JEP for full calculation breakdown.
           </p>
 
-          <div className="mt-6">
+            <div>
             <h4 className="font-bold text-sm text-destructive mb-3 flex items-center gap-2">
               <XCircle size={16} /> Strict Exclusions
             </h4>
@@ -328,7 +351,87 @@ export default function Coverage() {
                 <li>Pandemics & Epidemics</li>
               </ul>
             </div>
-          </div>
+            </div>
+
+            {/* Parametric Logic Explanation */}
+            <div className="nexus-panel rounded-2xl p-5 border-l-4 border-l-primary">
+              <h4 className="font-bold text-sm text-foreground mb-3 flex items-center gap-2">
+                <Activity size={16} className="text-primary" /> How Parametric Triggers Work
+              </h4>
+              <div className="space-y-3 text-xs text-muted-foreground leading-relaxed">
+                <p>
+                  Unlike traditional insurance where you file a claim and wait for an adjuster, <span className="font-bold text-foreground">parametric coverage activates automatically</span> when an objective environmental threshold is crossed in your H3 micro-zone.
+                </p>
+                <div className="grid gap-2 sm:grid-cols-3 mt-3">
+                  <div className="rounded-xl border border-border/40 bg-background/50 p-3">
+                    <p className="text-[10px] font-black uppercase tracking-widest text-primary mb-1">Step 1</p>
+                    <p className="text-xs font-bold text-foreground">Signal Detection</p>
+                    <p className="text-[10px] text-muted-foreground">Weather, AQI, and traffic APIs stream live data verified by Signal Fabric.</p>
+                  </div>
+                  <div className="rounded-xl border border-border/40 bg-background/50 p-3">
+                    <p className="text-[10px] font-black uppercase tracking-widest text-primary mb-1">Step 2</p>
+                    <p className="text-xs font-bold text-foreground">Threshold Breach</p>
+                    <p className="text-[10px] text-muted-foreground">When intensity exceeds the trigger level in your zone, the Event Twin activates.</p>
+                  </div>
+                  <div className="rounded-xl border border-border/40 bg-background/50 p-3">
+                    <p className="text-[10px] font-black uppercase tracking-widest text-primary mb-1">Step 3</p>
+                    <p className="text-xs font-bold text-foreground">Auto-Payout</p>
+                    <p className="text-[10px] text-muted-foreground">Payout is computed by Pmax formula and released to your wallet within seconds.</p>
+                  </div>
+                </div>
+              </div>
+            </div>
+
+            {/* Basis Risk + Regulatory */}
+            <div className="grid gap-4 sm:grid-cols-2">
+              <div className="nexus-panel rounded-2xl p-4">
+                <h4 className="font-bold text-xs text-foreground mb-2 uppercase tracking-widest">Basis Risk Mitigation</h4>
+                <p className="text-[11px] text-muted-foreground leading-relaxed">
+                  Capped payouts and H3 micro-zone verification minimize basis risk — the gap between actual loss and parametric payout. Signal Fabric cross-references 3+ independent data sources per trigger to ensure alignment.
+                </p>
+              </div>
+              <div className="nexus-panel rounded-2xl p-4">
+                <h4 className="font-bold text-xs text-foreground mb-2 uppercase tracking-widest">Data Sources</h4>
+                <div className="space-y-2 mt-2">
+                  {[
+                    { name: 'OpenWeatherMap', type: 'Weather', badge: 'Public API' },
+                    { name: 'WAQI.info', type: 'Air Quality', badge: 'Public API' },
+                    { name: 'TomTom Traffic', type: 'Traffic', badge: 'Commercial API' },
+                  ].map(s => (
+                    <div key={s.name} className="flex items-center justify-between text-[11px]">
+                      <span className="text-muted-foreground"><span className="font-bold text-foreground">{s.name}</span> — {s.type}</span>
+                      <span className="text-[9px] font-bold uppercase tracking-widest text-emerald-500 bg-emerald-500/10 px-2 py-0.5 rounded-full">{s.badge}</span>
+                    </div>
+                  ))}
+                </div>
+              </div>
+            </div>
+
+            {/* Regulatory Badges */}
+            <div className="grid gap-3 sm:grid-cols-3">
+              <div className="nexus-subpanel rounded-2xl p-4 text-center">
+                <div className="w-10 h-10 mx-auto rounded-full bg-primary/10 flex items-center justify-center border border-primary/20 mb-3">
+                  <Shield size={18} className="text-primary" />
+                </div>
+                <p className="text-xs font-black text-foreground">IRDAI Sandbox Ready</p>
+                <p className="text-[10px] text-muted-foreground mt-1">Parametric micro-insurance pathway under Regulatory Sandbox framework</p>
+              </div>
+              <div className="nexus-subpanel rounded-2xl p-4 text-center">
+                <div className="w-10 h-10 mx-auto rounded-full bg-emerald-500/10 flex items-center justify-center border border-emerald-500/20 mb-3">
+                  <Shield size={18} className="text-emerald-500" />
+                </div>
+                <p className="text-xs font-black text-foreground">DPDP Act Compliant</p>
+                <p className="text-[10px] text-muted-foreground mt-1">Personal data processed under consent with purpose limitation and data minimization</p>
+              </div>
+              <div className="nexus-subpanel rounded-2xl p-4 text-center">
+                <div className="w-10 h-10 mx-auto rounded-full bg-blue-500/10 flex items-center justify-center border border-blue-500/20 mb-3">
+                  <Shield size={18} className="text-blue-500" />
+                </div>
+                <p className="text-xs font-black text-foreground">Income-Loss Only</p>
+                <p className="text-[10px] text-muted-foreground mt-1">Strictly parametric income protection. No health, life, or asset coverage</p>
+              </div>
+            </div>
+          </section>
         </div>
       </main>
     </div>

@@ -2,7 +2,7 @@ import { motion, AnimatePresence } from "framer-motion";
 import { ArrowLeft, CheckCircle, Shield, Zap, Crown, Star, Lock } from "lucide-react";
 import { useNavigate } from "react-router-dom";
 import { useState, useEffect } from "react";
-import axios from "axios";
+import { apiClient } from "../lib/apiClient";
 import { cn } from "../lib/utils";
 import {
   PREMIUM_PLANS,
@@ -16,10 +16,12 @@ import {
 const PLAN_DISPLAY = [
   {
     id: "basic" as PlanTier,
-    icon: <Shield size={20} />,
-    iconColor: "text-blue-400",
-    iconBg: "bg-blue-400/10 border-blue-400/20",
+    icon: <Shield size={24} />,
+    color: "blue",
+    accent: "text-blue-400",
+    bg: "bg-blue-400/10 border-blue-400/20",
     recommended: false,
+    gradient: "from-blue-500/20 to-transparent",
     features: [
       "Up to ₹200 per disruption",
       "2 claims per week",
@@ -27,40 +29,44 @@ const PLAN_DISPLAY = [
       "Within 90 seconds settlement",
       "72 hours waiting period",
     ],
-    desc: "Best for: Low-risk zones, dry season workers",
+    desc: "Low-risk zones, dry season workers",
   },
   {
     id: "standard" as PlanTier,
-    icon: <Star size={20} />,
-    iconColor: "text-primary",
-    iconBg: "bg-primary/10 border-primary/20",
+    icon: <Star size={24} />,
+    color: "primary",
+    accent: "text-primary",
+    bg: "bg-primary/10 border-primary/20",
     recommended: true,
+    gradient: "from-primary/30 to-transparent",
     features: [
       "Up to ₹350 per disruption",
       "3 claims per week",
       "30-minute trigger threshold",
       "Within 90 seconds settlement",
       "48 hours waiting period",
-      "Storm Shield: Available (+₹20/w)",
+      "Storm Shield: Available",
     ],
-    desc: "Best for: Most delivery workers, monsoon season",
+    desc: "Most delivery workers, monsoon season",
   },
   {
     id: "pro" as PlanTier,
-    icon: <Crown size={20} />,
-    iconColor: "text-amber-400",
-    iconBg: "bg-amber-400/10 border-amber-400/20",
+    icon: <Crown size={24} />,
+    color: "amber",
+    accent: "text-amber-400",
+    bg: "bg-amber-400/10 border-amber-400/20",
     recommended: false,
+    gradient: "from-amber-400/20 to-transparent",
     features: [
       "Up to ₹580 per disruption",
       "4 claims per week",
       "20-minute trigger threshold",
       "Within 60 seconds settlement",
       "24 hours waiting period",
-      "Storm Shield: Included automatically",
-      "Human adjuster within 6 hours",
+      "Storm Shield: Included",
+      "Human adjuster within 6h",
     ],
-    desc: "Best for: High earners, flood-prone zones, peak monsoon",
+    desc: "High earners, flood-prone zones",
   },
 ];
 
@@ -108,7 +114,7 @@ export default function CoveragePlans() {
       handler: async function () {
         setIsProcessing(true);
         try {
-          const res = await axios.post("/api/premium/activate", {
+          const res = await apiClient.post("/api/premium/activate", {
             partnerId,
             planType: planId,
           });
@@ -124,6 +130,20 @@ export default function CoveragePlans() {
       },
       prefill: { name: "Delivery Partner", contact: "9999999999" },
       theme: { color: "#f59e0b" },
+      config: {
+        display: {
+          blocks: {
+            upi: {
+              name: "Enter UPI ID",
+              instruments: [
+                { method: "upi", flows: ["collect"] }
+              ]
+            }
+          },
+          sequence: ["block.upi"],
+          preferences: { show_default_blocks: true }
+        }
+      },
       modal: { ondismiss: () => setIsProcessing(false) },
     };
 
@@ -204,68 +224,75 @@ export default function CoveragePlans() {
   }
 
   return (
-    <div className="min-h-screen bg-background text-foreground flex flex-col font-sans">
+    <div className="nexus-app-stage min-h-screen bg-background text-foreground font-sans overflow-x-hidden">
+      {/* Immersive Background */}
+      <div className="fixed inset-0 z-0 pointer-events-none opacity-40">
+        <div className="absolute top-[-10%] left-[-10%] w-[50%] h-[50%] bg-primary/20 rounded-full blur-[120px] animate-nexus-drift" />
+        <div className="absolute bottom-[-10%] right-[-10%] w-[60%] h-[50%] bg-emerald-500/10 rounded-full blur-[140px] animate-nexus-aurora" />
+      </div>
+
       {/* Header */}
-      <header className="flex items-center justify-between p-4 bg-background/95 backdrop-blur-md border-b border-border/50 sticky top-0 z-40">
-        <div className="flex items-center gap-3">
+      <header className="nexus-page-header sticky top-0 z-50">
+        <div className="flex items-center gap-4">
           <button
             onClick={() => navigate(-1)}
-            className="p-2 -ml-2 rounded-full hover:bg-secondary text-muted-foreground transition-colors"
+            className="p-2.5 rounded-2xl hover:bg-secondary/80 text-muted-foreground transition-all active:scale-90 border border-border/20 backdrop-blur-md"
           >
             <ArrowLeft size={20} />
           </button>
-          <div className="flex items-center gap-2">
-            <Shield size={20} className="text-primary" />
-            <span className="font-bold text-lg tracking-tight">Nexus Sovereign</span>
+          <div>
+            <h1 className="nexus-page-title">Sovereign Protection</h1>
+            <p className="text-[10px] font-bold text-primary tracking-[0.2em] uppercase mt-0.5">Nexus Control Center</p>
           </div>
         </div>
       </header>
 
-      <main className="flex-1 p-6 flex flex-col max-w-md mx-auto w-full">
-        {/* Step indicator */}
-        <div className="flex justify-between items-center mb-6">
-          <p className="text-xs font-bold text-primary uppercase tracking-widest">
-            {activeTier ? "Upgrade Plan" : "Step 3 of 3"}
-          </p>
-          <p className="text-xs font-semibold text-muted-foreground">Choose Plan</p>
+      <main className="nexus-app-content relative z-10 p-6 md:p-12 max-w-7xl mx-auto w-full">
+        <div className="flex flex-col md:flex-row md:items-end justify-between gap-6 mb-12">
+          <motion.div initial={{ opacity: 0, x: -20 }} animate={{ opacity: 1, x: 0 }} className="max-w-2xl">
+            <div className="nexus-section-eyebrow mb-2">
+              {activeTier ? "Account Upgrade" : "Security Protocol 03"}
+            </div>
+            <h2 className="text-4xl md:text-5xl font-extrabold tracking-tight mb-4">
+              {activeTier ? "Enhance Your Shield" : "Weekly Coverage Plans"}
+            </h2>
+            <p className="nexus-section-copy text-lg">
+              {activeTier
+                ? `Current tier: ${PREMIUM_PLANS[activeTier].name}. Select a higher echelon for mission-critical protection.`
+                : "Pricing is dynamically recalculated based on IMD heat and storm forecasts for your specific labor zone."}
+            </p>
+          </motion.div>
+
+          <AnimatePresence>
+            {activeTier && premiumUntilDate && (
+              <motion.div
+                initial={{ opacity: 0, scale: 0.9 }}
+                animate={{ opacity: 1, scale: 1 }}
+                className="bg-emerald-500/10 border border-emerald-500/20 rounded-3xl p-5 backdrop-blur-xl flex items-center gap-4 shadow-xl shadow-emerald-500/5 group hover:border-emerald-500/40 transition-colors"
+              >
+                <div className="w-12 h-12 rounded-2xl bg-emerald-500/20 flex items-center justify-center text-emerald-500">
+                  <CheckCircle size={24} />
+                </div>
+                <div>
+                  <p className="text-sm font-bold text-emerald-500 tracking-tight">
+                    {PREMIUM_PLANS[activeTier].name.toUpperCase()} SHIELD ACTIVE
+                  </p>
+                  <p className="text-xs text-muted-foreground font-medium">
+                    Valid via network pulse until {premiumUntilDate}
+                  </p>
+                </div>
+              </motion.div>
+            )}
+          </AnimatePresence>
         </div>
 
-        <motion.div initial={{ opacity: 0, y: 20 }} animate={{ opacity: 1, y: 0 }} className="mb-6">
-          <h1 className="text-3xl font-bold tracking-tight mb-2">
-            {activeTier ? "Upgrade Your Shield" : "Weekly Coverage Plans"}
-          </h1>
-          <p className="text-muted-foreground text-sm leading-relaxed">
-            {activeTier
-              ? `You're on the ${PREMIUM_PLANS[activeTier].name} plan. Upgrade to unlock higher payouts and faster protection.`
-              : "Standard recommended for your high-risk zone. Pricing recalculates weekly."}
-          </p>
-        </motion.div>
-
-        {/* Active plan badge */}
-        <AnimatePresence>
-          {activeTier && premiumUntilDate && (
-            <motion.div
-              initial={{ opacity: 0, height: 0 }}
-              animate={{ opacity: 1, height: "auto" }}
-              className="mb-4 bg-emerald-500/10 border border-emerald-500/20 rounded-2xl p-3 flex items-center gap-3"
-            >
-              <CheckCircle size={18} className="text-emerald-500 shrink-0" />
-              <div>
-                <p className="text-xs font-bold text-emerald-500">
-                  {PREMIUM_PLANS[activeTier].name} Plan Active
-                </p>
-                <p className="text-[11px] text-muted-foreground">
-                  Valid until {premiumUntilDate} — no re-purchase needed
-                </p>
-              </div>
-            </motion.div>
-          )}
-        </AnimatePresence>
-
-        <div className="space-y-4 mb-8 relative">
+        <div className="grid grid-cols-1 md:grid-cols-3 gap-6 lg:gap-8 mb-12 relative overflow-visible">
           {isProcessing && (
-            <div className="absolute inset-0 z-20 bg-background/60 backdrop-blur-sm flex items-center justify-center rounded-3xl">
-              <div className="w-8 h-8 border-4 border-primary border-t-transparent rounded-full animate-spin" />
+            <div className="fixed inset-0 z-[60] bg-background/40 backdrop-blur-md flex items-center justify-center">
+              <div className="flex flex-col items-center gap-4">
+                <div className="w-12 h-12 border-4 border-primary border-t-transparent rounded-full animate-spin shadow-primary/20 shadow-lg" />
+                <p className="text-xs font-bold tracking-widest text-primary uppercase animate-pulse">Initializing Payment Gateway...</p>
+              </div>
             </div>
           )}
 
@@ -276,94 +303,125 @@ export default function CoveragePlans() {
             const isLocked = activeTier !== null && !isUpgradable && !isCurrentPlan;
 
             return (
-              <motion.button
+              <motion.div
                 key={plan.id}
-                onClick={() => isUpgradable && handleSelectPlan(plan.id)}
-                disabled={isProcessing || !isUpgradable}
-                initial={{ opacity: 0, y: 20 }}
+                initial={{ opacity: 0, y: 30 }}
                 animate={{ opacity: 1, y: 0 }}
-                transition={{ delay: i * 0.08 }}
-                className={cn(
-                  "w-full text-left rounded-3xl p-6 border transition-all relative group shadow-sm",
-                  isCurrentPlan
-                    ? "border-emerald-500/50 bg-emerald-500/5 ring-1 ring-emerald-500/20"
-                    : isLocked
-                    ? "border-border/30 bg-card/40 opacity-50 cursor-not-allowed"
-                    : plan.recommended
-                    ? "border-primary/50 bg-card shadow-primary/5 ring-1 ring-primary/20 hover:border-primary hover:shadow-primary/10"
-                    : "border-border/50 bg-card hover:border-primary/40"
-                )}
+                transition={{ delay: i * 0.1, type: "spring", stiffness: 80 }}
+                className="relative group h-full"
               >
-                {/* Badges */}
-                <div className="absolute top-4 right-4 flex flex-col items-end gap-1.5">
-                  {isCurrentPlan && (
-                    <div className="bg-emerald-500 text-white text-[10px] font-bold px-2 py-0.5 rounded-md uppercase tracking-wider flex items-center gap-1">
-                      <CheckCircle size={10} /> Current Plan
-                    </div>
+                <button
+                  onClick={() => isUpgradable && handleSelectPlan(plan.id)}
+                  disabled={isProcessing || !isUpgradable}
+                  className={cn(
+                    "w-full h-full text-left rounded-[2.5rem] p-8 transition-all duration-300 relative flex flex-col items-stretch",
+                    isCurrentPlan
+                      ? "nexus-glow-card border-emerald-500/40 shadow-emerald-500/10"
+                      : isLocked
+                      ? "border-border/20 bg-card/20 opacity-40 cursor-not-allowed grayscale"
+                      : plan.recommended
+                      ? "nexus-glow-card border-primary/50 shadow-primary/20 scale-105 z-10 md:-translate-y-2"
+                      : "nexus-glass-card hover:border-primary/40 hover:translate-y-[-4px]"
                   )}
-                  {isLocked && (
-                    <div className="bg-secondary text-muted-foreground text-[10px] font-bold px-2 py-0.5 rounded-md uppercase tracking-wider flex items-center gap-1">
-                      <Lock size={9} /> Locked
-                    </div>
-                  )}
-                  {plan.recommended && !isCurrentPlan && !isLocked && (
-                    <div className="bg-primary text-primary-foreground text-[10px] font-bold px-2 py-0.5 rounded-md uppercase tracking-wider flex items-center gap-1 shadow-sm shadow-primary/20">
-                      <Zap size={10} className="fill-current" /> Recommended
-                    </div>
-                  )}
-                </div>
-
-                <div className="flex items-start gap-3 mb-4">
-                  <div className={cn("w-10 h-10 rounded-xl flex items-center justify-center border shrink-0", plan.iconBg)}>
-                    <span className={plan.iconColor}>{plan.icon}</span>
+                >
+                  {/* Status Badges */}
+                  <div className="absolute top-6 right-6 flex flex-col items-end gap-2">
+                    {isCurrentPlan && (
+                      <div className="bg-emerald-500 text-white text-[9px] font-black px-3 py-1 rounded-full uppercase tracking-widest flex items-center gap-1.5 shadow-lg shadow-emerald-500/20">
+                        <CheckCircle size={10} /> ACTIVE SHIELD
+                      </div>
+                    )}
+                    {isLocked && (
+                      <div className="bg-secondary/80 text-muted-foreground text-[9px] font-black px-3 py-1 rounded-full uppercase tracking-widest flex items-center gap-1.5">
+                        <Lock size={9} /> TIER RESTRICTED
+                      </div>
+                    )}
+                    {plan.recommended && !isCurrentPlan && !isLocked && (
+                      <div className="bg-primary text-primary-foreground text-[9px] font-black px-3 py-1 rounded-full uppercase tracking-widest flex items-center gap-1.5 shadow-xl shadow-primary/30 animate-pulse nexus-shimmer">
+                        <Zap size={10} className="fill-current" /> OPTIMAL TIER
+                      </div>
+                    )}
                   </div>
-                  <div>
-                    <h3 className="text-xl font-bold">{plan.id.charAt(0).toUpperCase() + plan.id.slice(1)}</h3>
-                    <p className="text-xs text-muted-foreground font-medium">
-                      <span className="text-lg font-bold text-foreground">₹{config.price}</span> / week
+
+                  <div className="flex items-center gap-4 mb-8">
+                    <div className={cn("w-14 h-14 rounded-2xl flex items-center justify-center border-2 shadow-inner transition-transform group-hover:scale-110", plan.bg)}>
+                      <span className={plan.accent}>{plan.icon}</span>
+                    </div>
+                    <div>
+                      <h3 className="text-2xl font-black tracking-tight">{plan.id.toUpperCase()}</h3>
+                      <div className="flex items-baseline gap-1.5">
+                        <span className="text-3xl font-black text-foreground tabular-nums tracking-tighter">₹{config.price}</span>
+                        <span className="text-xs text-muted-foreground font-bold uppercase tracking-widest">/ week</span>
+                      </div>
+                    </div>
+                  </div>
+
+                  <div className="flex-grow">
+                    <ul className="space-y-4 mb-8">
+                      {plan.features.map((feat, j) => (
+                        <li key={j} className="flex items-start gap-3.5 text-sm font-semibold opacity-90 leading-tight">
+                          <div className={cn("mt-0.5 shrink-0", isCurrentPlan ? "text-emerald-500" : "text-primary")}>
+                            <CheckCircle size={15} />
+                          </div>
+                          <span>{feat}</span>
+                        </li>
+                      ))}
+                    </ul>
+                  </div>
+
+                  <div className="pt-6 border-t border-border/10">
+                    <p className="text-[11px] text-muted-foreground font-bold uppercase tracking-wider mb-4 leading-relaxed italic">
+                      {plan.desc}
                     </p>
+
+                    {/* CTA */}
+                    <div 
+                      className={cn(
+                        "w-full rounded-2xl py-4 text-xs font-black uppercase tracking-[0.2em] transition-all shadow-lg flex items-center justify-center gap-2",
+                        isCurrentPlan 
+                          ? "bg-emerald-500/10 text-emerald-500 border border-emerald-500/20" 
+                          : isUpgradable 
+                          ? "bg-primary text-primary-foreground hover:bg-primary/90 hover:shadow-primary/30 active:scale-[0.98]" 
+                          : "bg-secondary text-muted-foreground border border-border/10"
+                      )}
+                    >
+                      {isCurrentPlan ? (
+                        <>SHIELD ENGAGED</>
+                      ) : isUpgradable ? (
+                        <>{activeTier ? "EXECUTE UPGRADE" : `ACTIVATE ${plan.id.toUpperCase()}`} <Zap size={12} className="fill-current" /></>
+                      ) : (
+                        <>UNAVAILABLE</>
+                      )}
+                    </div>
                   </div>
-                </div>
-
-                <ul className="space-y-2.5 mb-5">
-                  {plan.features.map((feat, j) => (
-                    <li key={j} className="flex items-start gap-2.5 text-sm text-card-foreground font-medium">
-                      <CheckCircle
-                        size={14}
-                        className={cn(
-                          "shrink-0 mt-0.5",
-                          isCurrentPlan ? "text-emerald-500/70" : "text-primary/70"
-                        )}
-                      />
-                      <span>{feat}</span>
-                    </li>
-                  ))}
-                </ul>
-
-                <div className="text-xs text-muted-foreground font-medium pt-4 border-t border-border/50">
-                  {plan.desc}
-                </div>
-
-                {/* CTA */}
-                {isUpgradable && !isCurrentPlan && (
-                  <div className="mt-4 bg-primary/10 border border-primary/20 rounded-xl px-4 py-2 text-xs font-bold text-primary text-center">
-                    {activeTier ? `Upgrade to ${plan.id.charAt(0).toUpperCase() + plan.id.slice(1)} →` : `Select ${plan.id.charAt(0).toUpperCase() + plan.id.slice(1)} →`}
-                  </div>
+                </button>
+                
+                {/* Visual Glow Layer for Recommended */}
+                {plan.recommended && !isLocked && (
+                  <div className="absolute inset-0 -z-10 bg-primary/5 blur-3xl opacity-50 pointer-events-none" />
                 )}
-              </motion.button>
+              </motion.div>
             );
           })}
         </div>
 
-        <div className="bg-secondary/50 rounded-2xl p-4 mb-6 text-xs text-muted-foreground font-medium leading-relaxed border border-border/10 flex items-start gap-3">
-          <Zap size={16} className="text-primary shrink-0 mt-0.5" />
-          <p>
-            Base ₹30 adjusted to{" "}
-            <strong className="text-foreground">₹40/week</strong> for High Risk
-            zone. Dynamic pricing model recalculates every Sunday based on IMD
-            weekly forecast.
-          </p>
-        </div>
+        <motion.div 
+          initial={{ opacity: 0 }} 
+          animate={{ opacity: 1 }} 
+          transition={{ delay: 0.5 }}
+          className="nexus-glass-card rounded-3xl p-6 md:p-8 flex items-center gap-6 border-border/10"
+        >
+          <div className="w-16 h-16 rounded-2xl bg-primary/10 flex items-center justify-center shrink-0 border border-primary/20">
+            <Zap size={28} className="text-primary animate-pulse" />
+          </div>
+          <div>
+            <h4 className="text-sm font-black uppercase tracking-widest mb-2">Dynamic Actuarial Adjustment</h4>
+            <p className="text-xs text-muted-foreground font-medium leading-loose">
+              Base coverage (₹30) is currently adjusted to <strong className="text-foreground">₹40/week</strong> for the High Risk zone. 
+              Pricing models recalculate every Sunday at 00:00 UTC based on cumulative IMD/Skymet forecast data.
+            </p>
+          </div>
+        </motion.div>
       </main>
     </div>
   );

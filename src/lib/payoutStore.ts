@@ -2,6 +2,7 @@ import { supabase } from "./supabase";
 import { calculateReservePool, calculateZeroTouchPayout, normalizePersonaLabel } from "./actuarial";
 import { getActivePlan, rehydratePlanFromServer } from "./premiumPlans";
 import { parseJsonOrThrow } from "./fetchJson";
+import { type EventTwin } from "./eventTwin";
 
 // ---------- Types ----------
 export interface PayoutClaim {
@@ -42,6 +43,7 @@ export interface PayoutClaim {
     calculated_payout?: number;
     p_max?: number;
   };
+  evidence_url?: string;
 }
 
 export interface WalletTransaction {
@@ -60,6 +62,19 @@ export interface PaymentMethod {
   label: string;
   verified: boolean;
   isDefault?: boolean;
+}
+
+// ---------- Realtime Connection State ----------
+type ConnectionStatus = "CONNECTING" | "SUBSCRIBED" | "CHANNEL_ERROR" | "CLOSED" | "TIMED_OUT";
+let connectionStatus: ConnectionStatus = "CLOSED";
+
+export function getConnectionStatus() {
+  return connectionStatus;
+}
+
+function setConnectionStatus(status: ConnectionStatus) {
+  connectionStatus = status;
+  window.dispatchEvent(new Event("nexus-connection-update"));
 }
 
 // ---------- Disruption catalog ----------
@@ -210,6 +225,93 @@ const PAYMENT_METHODS_KEY = "nexus_payment_methods";
 const PREMIUM_UNTIL_KEY = "nexus_premium_until";
 const LAST_SEEN_CLAIM_ID = "nexus_last_seen_claim_id";
 const PENDING_NOTIF_PAYLOAD = "nexus_pending_payout_notif";
+const EVENT_TWINS_KEY = "nexus_event_twins";
+
+function isSimulationClaimRecord(claim: any) {
+  const claimId = String(claim?.id || claim?.claim_id_str || "").trim();
+  const jep = claim?.jepData || claim?.jep_data || {};
+  const source = String(jep?.source || "").toLowerCase();
+  const simulationType = String(jep?.simulation_type || "").trim();
+  return claimId.startsWith("SIM-") || source === "admin_simulation" || simulationType.length > 0;
+}
+
+function resolveSimulationText(...values: unknown[]) {
+  for (const value of values) {
+    if (typeof value !== "string") continue;
+    const trimmed = value.trim();
+    if (trimmed) return trimmed;
+  }
+  return null;
+}
+
+function resolveSimulationNumber(...values: unknown[]) {
+  for (const value of values) {
+    const numeric = Number(value);
+    if (Number.isFinite(numeric)) {
+      return numeric;
+    }
+  }
+  return null;
+}
+
+function getSimulationNotificationKey(input: any) {
+  const claim = input?.claim || input;
+  const jep = claim?.jepData || claim?.jep_data || {};
+
+  return resolveSimulationText(
+    input?.simulation_id,
+    input?.simulationId,
+    claim?.simulation_id,
+    jep?.simulation_id,
+    input?.id,
+    input?.claimId,
+    claim?.id,
+    claim?.claim_id_str
+  );
+}
+
+function getSimulationPopupMetadata(input: any) {
+  const claim = input?.claim || input;
+  const jep = claim?.jepData || claim?.jep_data || {};
+
+  const simulationId = resolveSimulationText(
+    input?.simulation_id,
+    input?.simulationId,
+    claim?.simulation_id,
+    jep?.simulation_id
+  );
+
+  return {
+    notificationKey: getSimulationNotificationKey(input),
+    simulationId,
+    popupDisplayAt: resolveSimulationText(
+      input?.popup_display_at,
+      input?.popupDisplayAt,
+      claim?.popup_display_at,
+      jep?.popup_display_at
+    ),
+    popupDelayMs: resolveSimulationNumber(
+      input?.popup_delay_ms,
+      input?.popupDelayMs,
+      claim?.popup_delay_ms,
+      jep?.popup_delay_ms
+    ),
+    popupTitle: resolveSimulationText(
+      input?.title,
+      input?.popup_title,
+      claim?.title,
+      claim?.popup_title,
+      jep?.popup_title
+    ),
+    ctaLabel: resolveSimulationText(
+      input?.cta_label,
+      input?.ctaLabel,
+      claim?.cta_label,
+      claim?.popup_cta_label,
+      jep?.popup_cta_label
+    ),
+  };
+}
 
 /**
  * Clears ALL user-scoped data from localStorage.
@@ -224,6 +326,7 @@ export function clearUserSession(): void {
     PREMIUM_UNTIL_KEY,
     LAST_SEEN_CLAIM_ID,
     PENDING_NOTIF_PAYLOAD,
+    EVENT_TWINS_KEY,
     "partner_id",
     "dummy_session",
     "signin_method",
@@ -239,8 +342,131 @@ export function clearUserSession(): void {
   console.log("[Session] 🔒 User session cleared — all local data wiped for new login.");
 }
 
-// ---------- Default seed data ----------
+/**
+ * Normalizes local claim data to match the latest interface.
+ * This prevents destructive resets by migrating old schemas forward.
+ */
+export function normalizeClaimStore(): void {
+  try {
+    const raw = localStorage.getItem(CLAIMS_KEY);
+    if (!raw) return;
+
+    const claims = JSON.parse(raw);
+    if (!Array.isArray(claims)) return;
+
+    const normalized = claims.map((c: any) => {
+      // Ensure dateISO exists (used for sorting/sync)
+      if (!c.dateISO && c.date) {
+        c.dateISO = new Date(c.date).toISOString();
+      }
+
+      // Ensure jepData structure exists
+      if (!c.jepData) {
+        c.jepData = c.jep_data || {
+          trigger_type: c.type || "Unknown",
+          worded_summary: c.reason || "Migrated local claim record.",
+          technical_reason: "Record synchronized from legacy local state.",
+          confidence: 100,
+          ai_probability: 0,
+          reserveLevel: 142,
+          processingTime: "N/A",
+          partnerPlatform: "Nexus",
+          telemetryStatus: "Legacy Hydrated",
+          weatherStatus: "N/A"
+        };
+      }
+
+      // Ensure summary exists
+      if (!c.summary) {
+        c.summary = {
+          type: c.status || "approved",
+          wordedReason: c.reason || "Migrated",
+          technicalReason: "Legacy normalization",
+          policyClauses: ["Nexus Sovereign Protocol"],
+          triggers: [c.type || "System Event"]
+        };
+      }
+
+      return c;
+    });
+
+    localStorage.setItem(CLAIMS_KEY, JSON.stringify(normalized));
+    console.log(`[Store] 🛡️ Validated and normalized ${normalized.length} claim(s).`);
+  } catch (e) {
+    console.warn("[Store] ⚠️ Failed to normalize claim store:", e);
+  }
+}
+
+// ---------- Pre-existed Demo Fraud Claim ----------
+const MOCK_FRAUD_CLAIM: PayoutClaim = {
+  id: "NXS-TRUTH-009",
+  date: "17 Apr 2026",
+  dateISO: new Date().toISOString(),
+  amount: 0,
+  status: "rejected",
+  type: "Heavy Rain (>20mm/hr)",
+  reason: "Rain payout needed",
+  tier: "Tier 2 (Assisted)",
+  tierColor: "text-blue-500",
+  tierBg: "bg-blue-500/10",
+  summary: {
+    type: "rejected",
+    wordedReason: "Forensic analysis detected that the submitted evidence is AI-generated and does not represent a real-world event.",
+    technicalReason: "AI Forensic Analysis: Synthetic artifacts detected (Confidence: 98%). Image features non-natural reflection symmetry and surface noise characteristic of GAN/Diffusion models.",
+    policyClauses: ["Nexus Fraud Prevention Protocol", "Clause 12.1 (Truthful Evidence)"],
+    triggers: ["Rainfall intensity > 20mm/hr"],
+  },
+  jepData: {
+    trigger_type: "Heavy Rain",
+    worded_summary: "AI-Generated Image Detected. This evidence packet has been flagged across the Signal Fabric as synthetic.",
+    technical_reason: "Cortex-V3 Vision scan returned 98.4% probability of AI generation. Image lacks standard camera sensor noise and contains structural hallucinations.",
+    confidence: 12,
+    ai_probability: 98.4,
+    reserveLevel: 142,
+    processingTime: "860ms",
+    partnerPlatform: "Swiggy",
+    telemetryStatus: "Rejected (Synthetic Artifacts)",
+    weatherStatus: "Heavy Rain (>20mm/hr)",
+  },
+  evidence_url: "/assets/evidence/ai_rain_demo.png",
+};
+
+const MOCK_POLLUTION_CLAIM: PayoutClaim = {
+  id: "NXS-TRUTH-010",
+  date: "17 Apr 2026",
+  dateISO: new Date().toISOString(),
+  amount: 0,
+  status: "rejected",
+  type: "Air Quality Emergency (AQI>400)",
+  reason: "Extreme pollution",
+  tier: "Tier 2 (Assisted)",
+  tierColor: "text-blue-500",
+  tierBg: "bg-blue-500/10",
+  summary: {
+    type: "rejected",
+    wordedReason: "Forensic analysis detected that the submitted evidence has an altered timestamp (Time Warp) and is an AI-generated image.",
+    technicalReason: "AI Forensic Analysis: Synthetic artifacts and EXIF manipulation detected (Confidence: 99%). Time Warp bypass attempted with a generated image.",
+    policyClauses: ["Nexus Fraud Prevention Protocol", "Clause 12.1 (Truthful Evidence)", "Clause 12.2 (Data Integrity)"],
+    triggers: ["AQI > 400"],
+  },
+  jepData: {
+    trigger_type: "Air Quality Emergency",
+    worded_summary: "AI-Generated Image & Time Warp Detected. This evidence packet has been flagged across the Signal Fabric as synthetic and temporally manipulated.",
+    technical_reason: "Cortex-V3 Vision scan returned 99.1% probability of AI generation. EXIF timestamp anomaly detected indicating Time Warp fraud vector.",
+    confidence: 15,
+    ai_probability: 99.1,
+    reserveLevel: 142,
+    processingTime: "920ms",
+    partnerPlatform: "Zepto",
+    telemetryStatus: "Rejected (Synthetic & Time Warp)",
+    weatherStatus: "Hazardous AQI (450+)",
+  },
+  evidence_url: "/assets/evidence/pollution_time_warp_demo.png",
+};
+
 const SEED_CLAIMS: PayoutClaim[] = [
+  MOCK_FRAUD_CLAIM,
+  MOCK_POLLUTION_CLAIM,
   {
     id: "CLM-8923",
     date: "24 Mar 2026",
@@ -379,14 +605,44 @@ const DEFAULT_BALANCE = 3450.00;
 
 // ---------- Store functions ----------
 
+export function getEventTwins(): EventTwin[] {
+  try {
+    const raw = localStorage.getItem(EVENT_TWINS_KEY);
+    if (raw) return JSON.parse(raw);
+  } catch {}
+  return [];
+}
+
+export function saveEventTwins(twins: EventTwin[]) {
+  localStorage.setItem(EVENT_TWINS_KEY, JSON.stringify(twins));
+}
+
+export function addEventTwinLocally(twin: EventTwin): void {
+  try {
+    const existing = getEventTwins();
+    const deduped = existing.filter(t => t.id !== twin.id);
+    const updated = [twin, ...deduped];
+    saveEventTwins(updated);
+    window.dispatchEvent(new Event("nexus-event-twin-update"));
+    console.log("[Store] ✅ Event Twin added locally:", twin.id);
+  } catch (e) {
+    console.error("[Store] ❌ addEventTwinLocally failed:", e);
+  }
+}
+
 export function getClaims(): PayoutClaim[] {
   try {
     const raw = localStorage.getItem(CLAIMS_KEY);
-    if (raw) return JSON.parse(raw);
-  } catch {}
-  // First run: seed defaults
-  localStorage.setItem(CLAIMS_KEY, JSON.stringify(SEED_CLAIMS));
-  return SEED_CLAIMS;
+    const existing = raw ? JSON.parse(raw) : [];
+    
+    // DEMO HARDENING: Always prepend the truth-claim if it is missing or ensure it's at the top
+    const filtered = existing.filter((c: any) => c.id !== MOCK_FRAUD_CLAIM.id && c.id !== MOCK_POLLUTION_CLAIM.id);
+    const finalClaims = [MOCK_FRAUD_CLAIM, MOCK_POLLUTION_CLAIM, ...filtered];
+    
+    return finalClaims;
+  } catch { 
+    return SEED_CLAIMS;
+  }
 }
 
 /**
@@ -400,6 +656,11 @@ export function addClaimLocally(claim: PayoutClaim): void {
     // Avoid duplicates if somehow called twice
     const deduped = existing.filter(c => c.id !== claim.id);
     const updated = [claim, ...deduped];
+    
+    // GUARD: Only write and dispatch if data changed
+    const currentRaw = localStorage.getItem(CLAIMS_KEY);
+    if (currentRaw === JSON.stringify(updated)) return;
+
     localStorage.setItem(CLAIMS_KEY, JSON.stringify(updated));
     window.dispatchEvent(new Event("nexus-payout-update"));
     console.log("[Store] ✅ Claim added locally:", claim.id, "→", claim.status);
@@ -440,7 +701,7 @@ export function getTransactions(): WalletTransaction[] {
   try {
     const raw = localStorage.getItem(TRANSACTIONS_KEY);
     if (raw) return JSON.parse(raw);
-  } catch {}
+  } catch { }
   localStorage.setItem(TRANSACTIONS_KEY, JSON.stringify(SEED_TRANSACTIONS));
   return SEED_TRANSACTIONS;
 }
@@ -473,7 +734,7 @@ export function getBalance(): number {
   try {
     const raw = localStorage.getItem(BALANCE_KEY);
     if (raw) return parseFloat(raw);
-  } catch {}
+  } catch { }
   localStorage.setItem(BALANCE_KEY, String(DEFAULT_BALANCE));
   return DEFAULT_BALANCE;
 }
@@ -486,6 +747,12 @@ export async function setBalance(val: number, syncToServer = true) {
   if (syncToServer) {
     const partnerId = localStorage.getItem("partner_id");
     if (partnerId) {
+      // GUARD: Only write and sync if value actually changed
+      const current = localStorage.getItem(BALANCE_KEY);
+      if (current === String(val)) return;
+
+      localStorage.setItem(BALANCE_KEY, String(val));
+      
       try {
         const response = await fetch("/api/user/sync/balance", {
           method: "POST",
@@ -505,7 +772,7 @@ export function getPaymentMethods(): PaymentMethod[] {
   try {
     const raw = localStorage.getItem(PAYMENT_METHODS_KEY);
     if (raw) return JSON.parse(raw);
-  } catch {}
+  } catch { }
   const defaults: PaymentMethod[] = [
     { id: "upi-1", type: "upi", label: "UPI: user@okhdfcbank", verified: true, isDefault: true },
     { id: "card-1", type: "card", label: "Visa •••• 4242", verified: true },
@@ -545,9 +812,9 @@ export async function pushWalletUpdate(balance?: number, transaction?: WalletTra
   return fetch("/api/wallet/update", {
     method: "POST",
     headers: { "Content-Type": "application/json" },
-    body: JSON.stringify({ 
-      partnerId, 
-      balance, 
+    body: JSON.stringify({
+      partnerId,
+      balance,
       transaction: transaction ? {
         amount: transaction.amount,
         type: transaction.type,
@@ -574,12 +841,12 @@ export function getPolicyStatus() {
   const isUpgraded = localStorage.getItem("nexus_premium_upgraded") === "true";
   const until = localStorage.getItem(PREMIUM_UNTIL_KEY);
   if (!until) return { isActive: isUpgraded, validTill: "N/A", daysLeft: 0, isUpgraded };
-  
+
   const expiry = new Date(until);
   const now = new Date();
   const diffTime = expiry.getTime() - now.getTime();
   const diffDays = Math.ceil(diffTime / (1000 * 60 * 60 * 24));
-  
+
   const isActive = diffTime > 0 || isUpgraded;
 
   return {
@@ -600,33 +867,53 @@ export const getTotalProtectedEarnings = () => {
 
 // ---------- Cloud Sync Helpers ----------
 
+const SYNC_TIMEOUT_MS = 4500;
+
+async function fetchWithTimeout(input: RequestInfo | URL, timeoutMs: number = SYNC_TIMEOUT_MS) {
+  const controller = new AbortController();
+  const timeoutId = setTimeout(() => controller.abort(), timeoutMs);
+
+  try {
+    return await fetch(input, { signal: controller.signal });
+  } finally {
+    clearTimeout(timeoutId);
+  }
+}
+
 /**
  * Pulls the absolute source of truth from Supabase and overwrites local cache.
  * Call this on login or app start.
  */
 export async function syncWithServer(partnerId: string, source: string = "poll") {
-  if (!partnerId) return;
+  if (!partnerId) return null;
+
+  // Ensure local state is healthy before sync
+  normalizeClaimStore();
+
   // MASTER DIAGNOSTIC: Visual signal that the NEW engine is active
   if (source === "init") {
     console.log("%c🚀 NEXUS ENGINE V2.0: RELIABILITY MODE ACTIVE", "background: #3b82f6; color: white; font-weight: bold; padding: 10px; border-radius: 8px;");
   }
-  
+
   console.log(`[Sync] 🔄 Sync Initiated for ${partnerId} (Source: ${source})...`);
   try {
-    const res = await fetch(`/api/user/sync?partnerId=${partnerId}`);
+    localStorage.setItem("partner_id", partnerId);
+    const res = await fetchWithTimeout(`/api/user/sync?partnerId=${encodeURIComponent(partnerId)}`);
     const data = await parseJsonOrThrow<any>(res, "Sync failed");
     console.log("[Sync] Data received from server:", data);
-    
+
     // Update local cache from server truth
     if (data.user) {
+      const resolvedPartnerId = String(data.user.partnerId || data.user.partner_id || partnerId);
+      localStorage.setItem("partner_id", resolvedPartnerId);
       const serverBalance = Number(data.user.balance);
       if (Number.isFinite(serverBalance)) {
         localStorage.setItem(BALANCE_KEY, String(serverBalance));
       }
       // Sync other profile fields
-      if (data.user.premium_upgraded !== undefined) 
+      if (data.user.premium_upgraded !== undefined)
         localStorage.setItem("nexus_premium_upgraded", String(data.user.premium_upgraded));
-      
+
       // Update platform and phone if available
       if (data.user.platform) localStorage.setItem("signin_platform", data.user.platform);
       if (data.user.phone) localStorage.setItem("signin_phone", data.user.phone);
@@ -642,8 +929,8 @@ export async function syncWithServer(partnerId: string, source: string = "poll")
       if (data.user.last_lat) localStorage.setItem("nexus_last_lat", data.user.last_lat);
       if (data.user.last_lng) localStorage.setItem("nexus_last_lng", data.user.last_lng);
     }
-    
-    if (data.transactions && data.transactions.length > 0) {
+
+    if (Array.isArray(data.transactions)) {
       const mappedTxns = data.transactions.map((t: any) => ({
         id: t.id,
         title: t.title,
@@ -655,23 +942,18 @@ export async function syncWithServer(partnerId: string, source: string = "poll")
       }));
       localStorage.setItem(TRANSACTIONS_KEY, JSON.stringify(mappedTxns));
     }
-    
-    let newClaimsFound: PayoutClaim[] = [];
 
-    if (data.claims && data.claims.length > 0) {
-      const existingRaw = localStorage.getItem(CLAIMS_KEY);
-      const existingClaims = existingRaw ? JSON.parse(existingRaw) : [];
-      const existingIds = new Set(existingClaims.map((c: any) => c.id));
+    if (Array.isArray(data.claims)) {
 
       const mappedClaims = data.claims.map((c: any) => {
         const jep = c.jep_data || {};
         const claimAmount = c.amount || c.payout_inr;
         const claimDate = c.created_at || c.processed_at;
-        
-        const isManual = String(c.type || "").toLowerCase().includes("manual") || 
-                        String(c.reason || "").toLowerCase().includes("manual");
+
+        const isManual = String(c.type || "").toLowerCase().includes("manual") ||
+          String(c.reason || "").toLowerCase().includes("manual");
         const tier = isManual ? "Tier 2 (Assisted)" : "Tier 1 (Autonomous)";
-        
+
         return {
           id: c.claim_id_str || String(c.id),
           date: new Date(claimDate).toLocaleDateString("en-IN", { day: "2-digit", month: "short", year: "numeric" }),
@@ -688,7 +970,7 @@ export async function syncWithServer(partnerId: string, source: string = "poll")
             type: c.status || "approved",
             wordedReason: jep.worded_summary || c.reason || (isManual ? "Manual claim filed for review." : "Claim processed by the system."),
             technicalReason: jep.technical_reason || (isManual ? "Pending multi-layer forensic corroboration." : "Verified via autonomous telemetry."),
-            policyClauses: jep.trigger_type 
+            policyClauses: jep.trigger_type
               ? [`Clause 5.1 (Autonomous Trigger)`, `${jep.trigger_type} Coverage`]
               : ["Clause 5.1 (Autonomous Trigger)"],
             triggers: jep.trigger_type ? [jep.trigger_type] : [],
@@ -708,13 +990,22 @@ export async function syncWithServer(partnerId: string, source: string = "poll")
 
       // Swap mappedClaims reference for notification logic below
       const finalMappedClaims = mergedClaims;
+      const latestSimulationClaim = finalMappedClaims.find((claim: any) => isSimulationClaimRecord(claim));
 
       // FIRE POPUP: The "Stateless" trigger
-      if (finalMappedClaims && finalMappedClaims.length > 0) {
-        const latestClaim = finalMappedClaims[0]; 
+      if (latestSimulationClaim) {
+        const latestClaim = latestSimulationClaim;
+        const popupMeta = getSimulationPopupMetadata(latestClaim);
+        const notificationKey = popupMeta.notificationKey || String(latestClaim.id || "").trim();
         const lastSeenId = localStorage.getItem(LAST_SEEN_CLAIM_ID);
-        
-        const isActuallyNew = String(latestClaim.id) !== String(lastSeenId || "");
+        const existingJepData =
+          (typeof latestClaim?.jepData === "object" && latestClaim?.jepData !== null
+            ? latestClaim.jepData
+            : typeof latestClaim?.jep_data === "object" && latestClaim?.jep_data !== null
+              ? latestClaim.jep_data
+              : {}) as Record<string, unknown>;
+
+        const isActuallyNew = notificationKey !== String(lastSeenId || "");
         const status = latestClaim.status?.toLowerCase();
         const isApproved = ["approved", "success", "paid", "completed", "processed"].includes(status || "");
         const claimTime = new Date(latestClaim.dateISO).getTime();
@@ -722,23 +1013,37 @@ export async function syncWithServer(partnerId: string, source: string = "poll")
         const isRecent = (now - claimTime) < (6 * 60 * 60 * 1000);
 
         if (isActuallyNew && isApproved && isRecent) {
-            console.group("%c👑 [NEXUS PERSISTENCE] Queuing Payout Event", "color: #10b981; font-weight: bold;");
-            console.log("Transmission Key:", latestClaim.id);
-            
-            const payoutPayload = {
-               id: String(latestClaim.id),
-               amount: Number(latestClaim.amount),
-               type: latestClaim.type || "Weather Update",
-               reason: latestClaim.reason || "Automatic trigger activated.",
-               dateISO: latestClaim.dateISO,
-               claim: latestClaim 
-            };
-            
-            localStorage.setItem(PENDING_NOTIF_PAYLOAD, JSON.stringify(payoutPayload));
-            window.dispatchEvent(new CustomEvent("nexus-zero-touch-payout", { detail: payoutPayload }));
-            localStorage.setItem(LAST_SEEN_CLAIM_ID, String(latestClaim.id));
-            console.groupEnd();
-        } 
+          console.group("%c👑 [NEXUS PERSISTENCE] Queuing Payout Event", "color: #10b981; font-weight: bold;");
+          console.log("Transmission Key:", latestClaim.id);
+
+          const payoutPayload = {
+            id: String(latestClaim.id),
+            simulation_id: popupMeta.simulationId || undefined,
+            amount: Number(latestClaim.amount),
+            type: latestClaim.type || "Weather Update",
+            reason: latestClaim.reason || "Automatic trigger activated.",
+            dateISO: latestClaim.dateISO,
+            popup_display_at: popupMeta.popupDisplayAt || undefined,
+            popup_delay_ms: popupMeta.popupDelayMs ?? undefined,
+            title: popupMeta.popupTitle || "Zero-Touch Trigger",
+            cta_label: popupMeta.ctaLabel || "View Claim Status",
+            claim: latestClaim,
+            jepData: {
+              ...existingJepData,
+              source: "admin_simulation",
+              simulation_id: popupMeta.simulationId || undefined,
+              popup_display_at: popupMeta.popupDisplayAt || undefined,
+              popup_delay_ms: popupMeta.popupDelayMs ?? undefined,
+              popup_title: popupMeta.popupTitle || "Zero-Touch Trigger",
+              popup_cta_label: popupMeta.ctaLabel || "View Claim Status",
+            }
+          };
+
+          localStorage.setItem(LAST_SEEN_CLAIM_ID, notificationKey);
+          localStorage.setItem(PENDING_NOTIF_PAYLOAD, JSON.stringify(payoutPayload));
+          window.dispatchEvent(new CustomEvent("nexus-zero-touch-payout", { detail: payoutPayload }));
+          console.groupEnd();
+        }
       }
     }
 
@@ -859,6 +1164,17 @@ export function generateZeroTouchPayout(lat?: number, lng?: number): GeneratedPa
   // Re-push transaction explicitly to be safe
   pushWalletUpdate(newBal, transaction);
 
+  const payoutPayload = {
+    id: claim.id,
+    amount,
+    type: claim.type,
+    reason,
+    dateISO: claim.dateISO,
+    claim
+  };
+  localStorage.setItem(PENDING_NOTIF_PAYLOAD, JSON.stringify(payoutPayload));
+  window.dispatchEvent(new CustomEvent("nexus-zero-touch-payout", { detail: payoutPayload }));
+
   // Notify listeners
   window.dispatchEvent(new Event("nexus-payout-update"));
 
@@ -890,7 +1206,7 @@ export function getNotifications(): NexusNotification[] {
     notifications.push({
       id: `notif-clm-${c.id}`,
       title: c.status === 'approved' ? "Instant Payout Approved" : "Claim Status Update",
-      description: c.status === 'approved' 
+      description: c.status === 'approved'
         ? `₹${c.amount} has been credited to your wallet for ${c.reason}.`
         : `Your claim ${c.id} for ${c.type} is ${c.status}.`,
       time: c.date,
@@ -949,6 +1265,24 @@ export function getUnreadCount(): number {
   return getNotifications().filter(n => !n.isRead).length;
 }
 
+function scheduleSimulationRefreshes(
+  partnerId: string,
+  sourcePrefix: string,
+  registerTimer: (timerId: number) => void,
+  unregisterTimer: (timerId: number) => void
+) {
+  const delays = [0, 1800, 4200];
+
+  delays.forEach((delay, index) => {
+    const timerId = window.setTimeout(() => {
+      unregisterTimer(timerId);
+      void syncWithServer(partnerId, `${sourcePrefix}-${index + 1}`);
+    }, delay);
+
+    registerTimer(timerId);
+  });
+}
+
 /**
  * TRUE REALTIME: Subscribes to Supabase table changes.
  * Pings the sync engine instantly on any server-side change.
@@ -956,30 +1290,173 @@ export function getUnreadCount(): number {
 export function initRealtimeSubscription(partnerId: string) {
   if (!partnerId) return;
   console.log(`🔌 Initializing Realtime for Partner: ${partnerId}`);
+  setConnectionStatus("CONNECTING");
+
+  const pendingTimers = new Set<number>();
+  let lastMassAnomalyKey = "";
+
+  const registerTimer = (timerId: number) => pendingTimers.add(timerId);
+  const unregisterTimer = (timerId: number) => pendingTimers.delete(timerId);
 
   const channel = supabase.channel(`nexus-realtime-${partnerId}`)
     // 1. Listen for profile/balance updates
     .on('broadcast', { event: 'balance-update' }, (payload) => {
-        console.log('📬 [Realtime] User Profile Update (Broadcast):', payload);
-        syncWithServer(partnerId, "realtime-profile");
+      console.log('📬 [Realtime] User Profile Update (Broadcast):', payload);
+      syncWithServer(partnerId, "realtime-profile");
     })
     // 2. Listen for new automated/manual claims
     .on('broadcast', { event: 'claim-update' }, (payload) => {
-        console.log('📬 [Realtime] NEW CLAIM DETECTED (Broadcast):', payload);
-        syncWithServer(partnerId, "realtime-claim");
+      console.log('📬 [Realtime] NEW CLAIM DETECTED (Broadcast):', payload);
+      syncWithServer(partnerId, "realtime-claim");
+    })
+    .on('broadcast', { event: 'payout' }, (payload) => {
+      console.log('📬 [Realtime] DIRECT PAYOUT EVENT (Broadcast):', payload);
+      const eventPayload: any = (payload as any)?.payload || payload;
+      const claim = eventPayload?.claim;
+      const transaction = eventPayload?.transaction;
+      const nextBalance = Number(eventPayload?.balance);
+      const popupMeta = getSimulationPopupMetadata(eventPayload);
+      const notificationKey =
+        popupMeta.notificationKey ||
+        resolveSimulationText(eventPayload?.id, eventPayload?.claimId, claim?.id) ||
+        `simulation-${Date.now()}`;
+      const existingJepData =
+        (typeof claim?.jepData === "object" && claim?.jepData !== null
+          ? claim.jepData
+          : typeof claim?.jep_data === "object" && claim?.jep_data !== null
+            ? claim.jep_data
+            : {}) as Record<string, unknown>;
+
+      if (claim?.id) {
+        addClaimLocally(claim);
+      }
+
+      if (transaction?.id) {
+        const mergedTransactions = [
+          transaction,
+          ...getTransactions().filter((item) => String(item.id) !== String(transaction.id)),
+        ];
+        void saveTransactions(mergedTransactions, false);
+      }
+
+      if (Number.isFinite(nextBalance)) {
+        void setBalance(nextBalance, false);
+      }
+
+      const payoutPayload = {
+        id: eventPayload?.id || eventPayload?.claimId || claim?.id,
+        simulation_id: popupMeta.simulationId || undefined,
+        amount: Number(eventPayload?.amount || claim?.amount || 0),
+        type: eventPayload?.type || claim?.type || "System Alert",
+        reason: eventPayload?.reason || claim?.reason || "Automatic trigger activated.",
+        dateISO: eventPayload?.timestamp || claim?.dateISO || new Date().toISOString(),
+        claim,
+        popup_display_at: popupMeta.popupDisplayAt || undefined,
+        popup_delay_ms: popupMeta.popupDelayMs ?? undefined,
+        title: popupMeta.popupTitle || "Zero-Touch Trigger",
+        cta_label: popupMeta.ctaLabel || "View Claim Status",
+        jepData: {
+          ...existingJepData,
+          source: "admin_simulation",
+          simulation_id: popupMeta.simulationId || undefined,
+          popup_display_at: popupMeta.popupDisplayAt || undefined,
+          popup_delay_ms: popupMeta.popupDelayMs ?? undefined,
+          popup_title: popupMeta.popupTitle || "Zero-Touch Trigger",
+          popup_cta_label: popupMeta.ctaLabel || "View Claim Status",
+        }
+      };
+      if (isSimulationClaimRecord(payoutPayload)) {
+        localStorage.setItem(PENDING_NOTIF_PAYLOAD, JSON.stringify(payoutPayload));
+        localStorage.setItem(LAST_SEEN_CLAIM_ID, notificationKey);
+        // Dispatch custom event to trigger the Zero-Touch popup
+        window.dispatchEvent(new CustomEvent("nexus-zero-touch-payout", { detail: payoutPayload }));
+      }
+      window.dispatchEvent(new Event("nexus-payout-update"));
+      void syncWithServer(partnerId, "realtime-payout");
+      scheduleSimulationRefreshes(partnerId, "direct-payout", registerTimer, unregisterTimer);
     })
     // 3. Listen for new wallet transactions
     .on('broadcast', { event: 'transaction-update' }, (payload) => {
-        console.log('📬 [Realtime] NEW TRANSACTION DETECTED (Broadcast):', payload);
-        syncWithServer(partnerId, "realtime-transaction");
+      console.log('📬 [Realtime] NEW TRANSACTION DETECTED (Broadcast):', payload);
+      syncWithServer(partnerId, "realtime-transaction");
     })
     .subscribe((status, err) => {
       console.log(`📡 [Realtime] Status: ${status}`);
-      if (err) console.error(`📡 [Realtime] Error:`, err);
+      if (err) {
+        console.error(`📡 [Realtime] Error:`, err);
+        setConnectionStatus("CHANNEL_ERROR");
+      } else {
+        setConnectionStatus(status as ConnectionStatus);
+      }
     });
+
+  const disruptionsChannel = supabase.channel("disruptions")
+    .on("broadcast", { event: "MASS_ANOMALY" }, (payload) => {
+      const eventPayload: any = (payload as any)?.payload || payload;
+      const anomalyKey = String(
+        eventPayload?.pulse_timestamp ||
+        eventPayload?.simulation_id ||
+        eventPayload?.message ||
+        Date.now()
+      );
+
+      if (anomalyKey === lastMassAnomalyKey) {
+        return;
+      }
+
+      lastMassAnomalyKey = anomalyKey;
+      console.log("📣 [Realtime] MASS_ANOMALY received. Syncing environment...", eventPayload);
+      
+      // RESILIENT FALLBACK: If this anomaly carries simulation data, trigger a popup 
+      // ONLY IF we haven't already received an individual 'payout' signal for this simulation.
+      if (eventPayload?.source === "admin_simulation" || eventPayload?.simulation_id) {
+         const popupMeta = getSimulationPopupMetadata(eventPayload);
+         const simId = popupMeta.simulationId || eventPayload?.simulation_id || anomalyKey;
+         const notificationKey = popupMeta.notificationKey || simId;
+         const lastSeen = localStorage.getItem(LAST_SEEN_CLAIM_ID);
+         
+         if (lastSeen !== notificationKey) {
+            console.log("🛠️ [Realtime] Anomaly-driven payout fallback triggered for demo continuity.");
+            const fallbackAmount = Number(eventPayload?.amount || 15.00);
+            const payoutPayload = {
+              id: simId,
+              simulation_id: simId,
+              amount: fallbackAmount,
+              type: eventPayload?.type || "Simulation",
+              reason: eventPayload?.message || "Autonomous payout triggered.",
+              dateISO: eventPayload?.pulse_timestamp || new Date().toISOString(),
+              popup_display_at: popupMeta.popupDisplayAt || undefined,
+              popup_delay_ms: popupMeta.popupDelayMs ?? undefined,
+              title: popupMeta.popupTitle || "Zero-Touch Trigger",
+              cta_label: popupMeta.ctaLabel || "View Claim Status",
+              isFallback: true,
+              jepData: {
+                source: "admin_simulation",
+                simulation_id: simId,
+                popup_display_at: popupMeta.popupDisplayAt || undefined,
+                popup_delay_ms: popupMeta.popupDelayMs ?? undefined,
+                popup_title: popupMeta.popupTitle || "Zero-Touch Trigger",
+                popup_cta_label: popupMeta.ctaLabel || "View Claim Status",
+              }
+            };
+
+            localStorage.setItem(PENDING_NOTIF_PAYLOAD, JSON.stringify(payoutPayload));
+            localStorage.setItem(LAST_SEEN_CLAIM_ID, notificationKey);
+            window.dispatchEvent(new CustomEvent("nexus-zero-touch-payout", { detail: payoutPayload }));
+         }
+      }
+
+      window.dispatchEvent(new Event("nexus-payout-update"));
+      scheduleSimulationRefreshes(partnerId, "mass-anomaly", registerTimer, unregisterTimer);
+    })
+    .subscribe();
 
   return () => {
     console.log("🔌 Disconnecting Realtime...");
+    setConnectionStatus("CLOSED");
+    pendingTimers.forEach((timerId) => window.clearTimeout(timerId));
+    pendingTimers.clear();
     supabase.removeChannel(channel);
+    supabase.removeChannel(disruptionsChannel);
   };
 }

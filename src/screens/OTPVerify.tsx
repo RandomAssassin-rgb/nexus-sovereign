@@ -4,6 +4,8 @@ import { ArrowLeft, Bell, KeyRound, Fingerprint } from "lucide-react";
 import { useNavigate } from "react-router-dom";
 import { useState, useRef, useEffect } from "react";
 import { supabase } from "../lib/supabase";
+import { persistSessionBridge } from "../lib/sessionBridge";
+import { loadBiometricModels } from "../lib/biometricService";
 
 export default function OTPVerify() {
   const navigate = useNavigate();
@@ -18,6 +20,7 @@ export default function OTPVerify() {
   useEffect(() => {
     // Only focus the first input once on mount
     inputRefs.current[0]?.focus();
+    void loadBiometricModels();
   }, []);
 
   useEffect(() => {
@@ -75,9 +78,22 @@ export default function OTPVerify() {
     if (otp.every((digit) => digit !== "")) {
       setLoading(true);
       // Mock validation for demo
-      setTimeout(() => {
+      setTimeout(async () => {
+        const partnerId = localStorage.getItem("partner_id") || "GUEST_USER";
+        const session = JSON.stringify({ user: { id: partnerId, name: "Nexus Partner" } });
+        // Persist as nexus_session (consistent with sessionBridge API)
+        localStorage.setItem("nexus_session", session);
+        await persistSessionBridge({
+          partner_id: partnerId,
+          nexus_session: session,
+          signin_phone: localStorage.getItem("signin_phone"),
+          signin_platform: localStorage.getItem("signin_platform"),
+        }).catch(() => undefined);
+        
+        window.dispatchEvent(new Event("auth-change"));
         setLoading(false);
-        navigate("/biometrics");
+        // Small delay for visual consistency
+        setTimeout(() => navigate("/biometrics", { state: { isSignup: true, partnerId } }), 100);
       }, 1000);
     }
   };
@@ -93,16 +109,22 @@ export default function OTPVerify() {
       
       const partnerId = localStorage.getItem("partner_id") || "GUEST_USER";
       // Simulate successful biometric auth
-      localStorage.setItem('dummy_session', JSON.stringify({ user: { id: partnerId, name: 'Nexus Partner' } }));
+      const session = JSON.stringify({ user: { id: partnerId, name: 'Nexus Partner' } });
+      localStorage.setItem('nexus_session', session);
+      await persistSessionBridge({
+          partner_id: partnerId,
+          nexus_session: session,
+          signin_phone: localStorage.getItem("signin_phone"),
+          signin_platform: localStorage.getItem("signin_platform"),
+        }).catch(() => undefined);
       window.dispatchEvent(new Event('auth-change'));
 
-      navigate("/biometrics");
+      navigate("/home", { replace: true });
     } catch (error) {
       console.error("Biometric auth failed", error);
       alert("Biometric authentication failed or is not supported.");
     }
   };
-
   return (
     <div className="min-h-screen bg-background flex flex-col">
       <header className="flex items-center justify-between p-4 border-b border-border/10">

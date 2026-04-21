@@ -1,10 +1,13 @@
 import { motion, AnimatePresence } from "framer-motion";
 import { ArrowLeft, Lock, KeyRound, ShieldCheck, Zap, Link2, CheckCircle2, Eye, EyeOff } from "lucide-react";
 import { useNavigate } from "react-router-dom";
-import { useState, useEffect } from "react";
-import axios from "axios";
+import { useState, useEffect, useCallback } from "react";
+import { apiClient } from "../lib/apiClient";
 import { clearUserSession } from "../lib/payoutStore";
 import { getApiErrorMessage } from "../lib/apiError";
+import AuthShell from "../components/AuthShell";
+import { clearSessionBridge, persistSessionBridge } from "../lib/sessionBridge";
+import { loadBiometricModels } from "../lib/biometricService";
 
 export default function SignInCredentials() {
   const navigate = useNavigate();
@@ -17,14 +20,30 @@ export default function SignInCredentials() {
   const [isConnected, setIsConnected] = useState(false);
   const [platform, setPlatform] = useState("");
 
+  const resolveFaceDescriptor = useCallback(async (resolvedPartnerId: string) => {
+    try {
+      const response = await apiClient.get(`/api/auth/profile/${encodeURIComponent(resolvedPartnerId)}`);
+      return response.data?.user?.face_descriptor ?? null;
+    } catch {
+      return null;
+    }
+  }, []);
+
   useEffect(() => {
+    void loadBiometricModels();
     const saved = localStorage.getItem("signin_platform") || "blinkit";
     setPlatform(saved);
 
-    const handleMessage = (event: MessageEvent) => {
+    const handleMessage = async (event: MessageEvent) => {
       const origin = event.origin;
-      // Allow any origin for local development testing, or specific production domains
-      if (!origin.endsWith('.run.app') && !origin.includes('localhost') && !/^http:\/\/10\./.test(origin) && !/^http:\/\/192\./.test(origin)) {
+      const isSameOrigin = origin === window.location.origin;
+      const isTrustedRemote =
+        origin.endsWith(".run.app") ||
+        origin.includes("localhost") ||
+        /^http:\/\/10\./.test(origin) ||
+        /^http:\/\/192\./.test(origin);
+
+      if (!isSameOrigin && !isTrustedRemote) {
         console.warn("Blocked message from untrusted origin:", origin);
         return;
       }
@@ -32,16 +51,43 @@ export default function SignInCredentials() {
       if (event.data?.type === 'OAUTH_AUTH_SUCCESS') {
         const pId = event.data.payload.partnerId;
         clearUserSession(); // wipe previous user's data before loading new user
+        await clearSessionBridge().catch(() => undefined);
         setPartnerId(pId);
         localStorage.setItem("partner_id", pId);
+        const session = {
+          user: { id: pId, verified: true, platform: localStorage.getItem("signin_platform") },
+          expires: new Date(Date.now() + 3600000).toISOString()
+        };
+        await persistSessionBridge({
+          partner_id: pId,
+          nexus_session: JSON.stringify(session),
+          signin_platform: localStorage.getItem("signin_platform"),
+        }).catch(() => undefined);
         setIsConnecting(false);
         setIsConnected(true);
-        setTimeout(() => navigate("/biometrics"), 1500);
+        const faceDescriptor = await resolveFaceDescriptor(pId);
+        setTimeout(
+          () =>
+            navigate("/biometrics", {
+              state: faceDescriptor
+                ? {
+                    partnerId: pId,
+                    faceDescriptor,
+                    hasFaceDescriptor: true,
+                  }
+                : {
+                    isSignup: true,
+                    recoveryMode: true,
+                    partnerId: pId,
+                  },
+            }),
+          1500,
+        );
       }
     };
     window.addEventListener('message', handleMessage);
     return () => window.removeEventListener('message', handleMessage);
-  }, [navigate]);
+  }, [navigate, resolveFaceDescriptor]);
 
   const handleConnect = (specificPlatform: string) => {
     setIsConnecting(true);
@@ -49,7 +95,7 @@ export default function SignInCredentials() {
     
     // Fallback to pure routing so we don't break on mobile popups.
     // For signin, successful mock oauth should go to biometrics.
-    navigate(`/mock-oauth?next=/biometrics`);
+    navigate(`/mock-oauth?next=/biometrics&flow=signin`);
   };
 
   const getPlatformLabel = (id: string) => {
@@ -83,23 +129,44 @@ export default function SignInCredentials() {
     }
 
     try {
-      const response = await axios.post("/api/auth/verify-password", {
+      const response = await apiClient.post("/api/auth/verify-password", {
         partnerId,
         password
       });
 
       if (response.data.success) {
+        const faceDescriptor = response.data.face_descriptor ?? await resolveFaceDescriptor(partnerId);
         clearUserSession(); // wipe previous user's data before loading new user
+        await clearSessionBridge().catch(() => undefined);
         localStorage.setItem("partner_id", partnerId);
-        const session = JSON.parse(localStorage.getItem("dummy_session") || "{}");
-        session.user = { 
-            ...session.user, 
+        const session = {
+          user: { 
             id: partnerId,
-            verified: true 
+            verified: true,
+            platform: localStorage.getItem("signin_platform")
+          },
+          expires: new Date(Date.now() + 3600000).toISOString()
         };
-        localStorage.setItem("dummy_session", JSON.stringify(session));
+        await persistSessionBridge({
+          partner_id: partnerId,
+          nexus_session: JSON.stringify(session),
+          signin_platform: localStorage.getItem("signin_platform"),
+          signin_phone: localStorage.getItem("signin_phone"),
+        }).catch(() => undefined);
         window.dispatchEvent(new Event("auth-change"));
-        navigate("/biometrics");
+        navigate("/biometrics", {
+          state: faceDescriptor
+            ? {
+                partnerId,
+                faceDescriptor,
+                hasFaceDescriptor: true,
+              }
+            : {
+                isSignup: true,
+                recoveryMode: true,
+                partnerId,
+              },
+        });
       }
     } catch (e: any) {
       setErrorPopup(getApiErrorMessage(e, "Backend Error: Could not connect to verification server."));
@@ -107,38 +174,16 @@ export default function SignInCredentials() {
   };
 
   return (
-    <div className="min-h-screen bg-background flex flex-col">
-      <header className="flex items-center p-4 border-b border-border/10">
-        <button onClick={() => navigate(-1)} className="p-2 -ml-2 hover:bg-secondary rounded-full">
-          <ArrowLeft size={20} />
-        </button>
-        <div className="ml-2 flex items-center gap-2">
-          <div className="w-6 h-6 bg-primary/20 rounded-md flex items-center justify-center">
-            <span className="text-primary text-xs font-bold">N</span>
-          </div>
-          <span className="font-bold tracking-tight">Nexus Sovereign</span>
-        </div>
-      </header>
-
-      <main className="flex-1 p-6 flex flex-col">
-        {/* Step indicator */}
-        <div className="mb-2">
-          <p className="text-[10px] font-bold text-primary uppercase tracking-widest">Sign In</p>
-        </div>
-
-        <motion.div
-          initial={{ opacity: 0, y: 20 }}
-          animate={{ opacity: 1, y: 0 }}
-          className="mb-6"
-        >
-          <h1 className="text-3xl font-bold tracking-tight mb-2">Welcome Back</h1>
-          <p className="text-muted-foreground text-sm">
-            Sign in with your gig platform or partner credentials to resume coverage.
-          </p>
-        </motion.div>
+    <AuthShell
+      title="Welcome back"
+      subtitle="Sign in with your gig platform or partner credentials to resume coverage."
+      onBack={() => navigate(-1)}
+      step="Sign in"
+      progress={0.66}
+    >
 
         {/* Tab Switch */}
-        <div className="grid grid-cols-2 gap-0 mb-6 bg-card border border-border/50 rounded-xl overflow-hidden">
+        <div className="mb-6 grid grid-cols-2 gap-0 overflow-hidden rounded-[1.15rem] border border-border/50 bg-card/65">
           <button
             onClick={() => setActiveTab("quick")}
             className={`py-3 text-sm font-bold uppercase tracking-wider transition-all ${
@@ -173,15 +218,15 @@ export default function SignInCredentials() {
               className="flex-1 flex flex-col"
             >
               {!isConnected ? (
-                <div className="space-y-3">
+              <div className="space-y-3">
                   {platformsToShow.map((p) => (
                     <button
                       key={p}
                       onClick={() => handleConnect(p)}
                       disabled={isConnecting}
-                      className="w-full bg-card border border-border/50 rounded-2xl p-4 flex items-center gap-4 hover:border-primary/50 transition-all group"
+                      className="group flex w-full items-center gap-4 rounded-[1.4rem] border border-border/50 bg-background/45 p-4 hover:border-primary/25 hover:bg-card/70 transition-all"
                     >
-                      <div className="w-12 h-12 rounded-full bg-primary/20 flex items-center justify-center shrink-0 border border-primary/30">
+                      <div className="flex h-12 w-12 shrink-0 items-center justify-center rounded-2xl border border-primary/30 bg-primary/20">
                         <Zap className="w-6 h-6 text-primary" />
                       </div>
                       <div className="flex-1 text-left">
@@ -205,7 +250,7 @@ export default function SignInCredentials() {
               )}
 
               {/* Security note */}
-              <div className="p-4 rounded-2xl bg-blue-500/5 border border-blue-500/20 flex gap-3 mt-6">
+              <div className="mt-6 flex gap-3 rounded-[1.35rem] border border-blue-500/20 bg-blue-500/5 p-4">
                 <ShieldCheck className="text-blue-400 shrink-0 mt-0.5" size={16} />
                 <p className="text-[10px] text-muted-foreground leading-relaxed">
                   Quick connect securely authenticates you via the platform's official login. We do not store your password.
@@ -318,7 +363,6 @@ export default function SignInCredentials() {
             </motion.div>
           </div>
         )}
-      </main>
-    </div>
+    </AuthShell>
   );
 }

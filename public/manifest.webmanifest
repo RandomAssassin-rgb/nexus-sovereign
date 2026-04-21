@@ -1,0 +1,18 @@
+{
+  "name": "Nexus Sovereign",
+  "short_name": "Nexus",
+  "description": "AI-driven parametric income protection for gig workers.",
+  "start_url": "/",
+  "scope": "/",
+  "display": "standalone",
+  "background_color": "#080807",
+  "theme_color": "#d19a2f",
+  "icons": [
+    {
+      "src": "/dashboard.png",
+      "sizes": "512x512",
+      "type": "image/png",
+      "purpose": "any maskable"
+    }
+  ]
+}

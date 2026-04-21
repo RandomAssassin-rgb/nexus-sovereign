@@ -1,14 +1,61 @@
-import { useState } from "react";
+import { useEffect, useState } from "react";
 import { motion, AnimatePresence } from "framer-motion";
 import { ChevronLeft, ShieldCheck, Key, Eye, EyeOff, Shield, Lock, AlertCircle, Fingerprint } from "lucide-react";
 import { useNavigate } from "react-router-dom";
-import axios from "axios";
+import { apiClient } from "../lib/apiClient";
+import { persistSessionBridge } from "../lib/sessionBridge";
+import { loadBiometricModels } from "../lib/biometricService";
 
 const passwordRules = (pw: string) => ({
   length: pw.length >= 8,
   upper: /[A-Z]/.test(pw),
   number: /[0-9]/.test(pw),
 });
+
+const SHORT_ADMIN_CODE_REGEX = /^NEXUS-(\d{4})$/;
+const FULL_ADMIN_CODE_REGEX = /^NEXUS-ADMIN-\d{4}$/;
+
+function normalizeAdminCode(value: string) {
+  const trimmed = value.trim().toUpperCase();
+  const shortMatch = trimmed.match(SHORT_ADMIN_CODE_REGEX);
+  if (shortMatch) {
+    return `NEXUS-ADMIN-${shortMatch[1]}`;
+  }
+  return trimmed;
+}
+
+function formatAdminAuthMessage(message: string | undefined, adminCode: string, diagnostic?: string) {
+  if (diagnostic) {
+    switch (diagnostic) {
+      case 'DB_TABLES_MISSING':
+        return "Infrastructure Error: Authentication tables are missing. Please contact system admin to run migrations.";
+      case 'DB_SCHEMA_MISMATCH':
+        return "System Drift: Database schema is out of sync. Infrastructure update required.";
+      case 'DB_ACCESS_DENIED':
+        return "Security Block: Backend bypass blocked. Database access denied.";
+      case 'SUPABASE_CONFIG_INVALID':
+        return "Environment Error: Supabase configuration is invalid on the server.";
+      case 'AUTH_QUERY_FAILED':
+        return "Database Exception: The authentication query failed. Check platform logs.";
+    }
+  }
+
+  if (!message) return "Server error. Check your connection.";
+
+  const normalized = normalizeAdminCode(adminCode || "");
+  if (message === "invalid" || message.includes("not found")) {
+    if (!FULL_ADMIN_CODE_REGEX.test(normalized)) {
+      return "Use a valid admin code like NEXUS-ADMIN-1244.";
+    }
+    return `No admin account was found for ${normalized}.`;
+  }
+
+  if (message.includes("password") || message === "password wrong") {
+    return "The password for this admin account is incorrect.";
+  }
+
+  return message;
+}
 
 export default function AdminAuth() {
   const navigate = useNavigate();
@@ -30,42 +77,91 @@ export default function AdminAuth() {
   const [siError, setSiError] = useState("");
   const [siLoading, setSiLoading] = useState(false);
 
+  useEffect(() => {
+    void loadBiometricModels();
+  }, []);
+
   // ─────────────────────────────────────────────────────
   const suRules = passwordRules(suPassword);
   const suPasswordValid = suRules.length && suRules.upper && suRules.number;
   const suPasswordsMatch = suPassword === suConfirm;
 
+  // Diagnostic helper to check if backend is reachable
+  const probeServer = async () => {
+    const controller = new AbortController();
+    const timeoutId = setTimeout(() => controller.abort(), 3000);
+
+    try {
+      const res = await fetch("/api/system/health", {
+        method: "GET",
+        headers: {
+          Accept: "application/json",
+        },
+        cache: "no-store",
+        signal: controller.signal,
+      }).catch(() => null);
+
+      if (!res?.ok) {
+        return false;
+      }
+
+      const contentType = res.headers.get("content-type")?.toLowerCase() || "";
+      if (!contentType.includes("application/json")) {
+        return false;
+      }
+
+      const payload = await res.json().catch(() => null);
+      return payload?.ok === true;
+    } catch (e: any) {
+      console.warn("[Diagnostic] Probe failed:", e.message);
+      return false;
+    } finally {
+      clearTimeout(timeoutId);
+    }
+  };
+
   const handleSignUp = async () => {
     setSuError("");
-    if (!suCode.trim()) return setSuError("invalid");
-    if (!suPasswordValid) return setSuError("password wrong");
-    if (!suPasswordsMatch) return setSuError("password wrong");
+    const normalizedCode = normalizeAdminCode(suCode);
+    if (!normalizedCode) return setSuError("Use a valid admin code like NEXUS-ADMIN-1244.");
+    if (!suPasswordValid) return setSuError("Password must be at least 8 characters with 1 uppercase letter and 1 number.");
+    if (!suPasswordsMatch) return setSuError("Passwords do not match.");
 
     setSuLoading(true);
     try {
-      const { data } = await axios.post("/api/admin/auth/signup", {
-        admin_code: suCode.trim(),
+      const { data } = await apiClient.post("/api/admin/auth/signup", {
+        admin_code: normalizedCode,
         password: suPassword,
       });
-      if (!data.success) return setSuError(data.message || "Signup failed.");
 
-      // Store in localStorage
-      localStorage.setItem("admin_id", data.admin.id);
-      localStorage.setItem("admin_role", data.admin.role);
-      localStorage.setItem("admin_code", suCode.trim());
+      if (!data.success) return setSuError(formatAdminAuthMessage(data.message, normalizedCode, data.diagnostic));
 
-      navigate("/biometrics", {
-        state: { isAdmin: true, isSignup: true, adminId: data.admin.id, adminCode: suCode.trim() },
-      });
+      // Success logic
+      const session = {
+        admin: { id: data.admin.id, role: data.admin.role, code: normalizedCode },
+        expires: new Date(Date.now() + 86400000).toISOString()
+      };
+      await persistSessionBridge({
+        admin_id: data.admin.id,
+        admin_role: data.admin.role,
+        admin_code: normalizedCode,
+        nexus_session: JSON.stringify(session)
+      }).catch(() => undefined);
+
+      window.dispatchEvent(new Event("admin-auth-change"));
+
+      setTimeout(() => navigate("/biometrics", {
+        replace: true,
+        state: { isAdmin: true, isSignup: true, adminId: data.admin.id, adminCode: normalizedCode },
+      }), 100);
     } catch (err: any) {
       console.error("Signup error:", err);
-      let msg = "Server error. Check your connection.";
-      if (err.response) {
-        msg = err.response.data?.message || `Error ${err.response.status}: ${err.response.statusText}`;
-      } else if (err.request) {
-        msg = "No response from server. Connection blocked or server down.";
-      }
-      setSuError(msg);
+        const isReachable = await probeServer();
+        if (!isReachable) {
+          setSuError("Backend Unreachable: start the API server or confirm the Vite /api proxy target is pointing at it.");
+        } else {
+          setSuError(formatAdminAuthMessage(err.response?.data?.message, normalizedCode));
+        }
     } finally {
       setSuLoading(false);
     }
@@ -73,59 +169,93 @@ export default function AdminAuth() {
 
   const handleSignIn = async () => {
     setSiError("");
-    if (!siCode.trim()) return setSiError("invalid");
+    const normalizedCode = normalizeAdminCode(siCode);
+    if (!normalizedCode) return setSiError("Use a valid admin code like NEXUS-ADMIN-1244.");
     if (!siPassword) return setSiError("password wrong");
+
+    const attemptSignIn = async (isRetry = false): Promise<void> => {
+      try {
+        const { data } = await apiClient.post("/api/admin/auth/signin", {
+          admin_code: normalizedCode,
+          password: siPassword,
+        });
+
+        if (!data.success) {
+          setSiError(formatAdminAuthMessage(data.message, normalizedCode, data.diagnostic));
+          return;
+        }
+
+        const session = {
+          admin: { id: data.admin.id, role: data.admin.role, code: normalizedCode },
+          expires: new Date(Date.now() + 86400000).toISOString()
+        };
+        await persistSessionBridge({
+          admin_id: data.admin.id,
+          admin_role: data.admin.role,
+          admin_code: normalizedCode,
+          nexus_session: JSON.stringify(session)
+        }).catch(() => undefined);
+
+        window.dispatchEvent(new Event("admin-auth-change"));
+
+        setTimeout(() => navigate("/biometrics", {
+          replace: true,
+          state: data.admin.face_descriptor
+            ? {
+                isAdmin: true,
+                isSignup: false,
+                adminId: data.admin.id,
+                adminCode: normalizedCode,
+                faceDescriptor: data.admin.face_descriptor,
+              }
+            : {
+                isAdmin: true,
+                isSignup: true,
+                recoveryMode: true,
+                adminId: data.admin.id,
+                adminCode: normalizedCode,
+              },
+        }), 100);
+      } catch (err: any) {
+        console.error("Signin error:", err);
+        if (!isRetry && (!err.response || err.code === "ECONNABORTED")) {
+          // Automatic 1-retry fallback
+          await new Promise(r => setTimeout(r, 1000));
+          return attemptSignIn(true);
+        }
+
+        const isReachable = await probeServer();
+        if (!isReachable) {
+          setSiError("Backend Unreachable: start the API server or confirm the Vite /api proxy target is pointing at it.");
+        } else {
+          // If server IS reachable, but the request failed, it's likely a logic error or 401/500
+          setSiError(formatAdminAuthMessage(err.response?.data?.message || "Internal server error during authentication.", normalizedCode, err.response?.data?.diagnostic));
+        }
+      }
+    };
 
     setSiLoading(true);
     try {
-      const { data } = await axios.post("/api/admin/auth/signin", {
-        admin_code: siCode.trim(),
-        password: siPassword,
-      });
-      if (!data.success) return setSiError(data.message || "Sign-in failed.");
-
-      // Store in localStorage
-      localStorage.setItem("admin_id", data.admin.id);
-      localStorage.setItem("admin_role", data.admin.role);
-      localStorage.setItem("admin_code", siCode.trim());
-
-      navigate("/biometrics", {
-        state: {
-          isAdmin: true,
-          isSignup: false,
-          adminId: data.admin.id,
-          adminCode: siCode.trim(),
-          hasFaceDescriptor: !!data.admin.face_descriptor,
-        },
-      });
-    } catch (err: any) {
-      console.error("Signin error:", err);
-      let msg = "Server error. Check your connection.";
-      if (err.response) {
-        msg = err.response.data?.message || `Error ${err.response.status}: ${err.response.statusText}`;
-      } else if (err.request) {
-        msg = "No response from server. Connection blocked or server down.";
-      }
-      setSiError(msg);
+      await attemptSignIn();
     } finally {
       setSiLoading(false);
     }
   };
 
   return (
-    <div className="min-h-screen bg-background text-foreground flex flex-col font-sans overflow-hidden selection:bg-primary/30">
+    <div className="nexus-auth-stage overflow-hidden bg-background text-foreground selection:bg-primary/30 font-sans">
       <div className="absolute top-1/2 left-1/2 -translate-x-1/2 -translate-y-1/2 w-64 h-64 bg-primary/20 rounded-full blur-[100px] pointer-events-none" />
 
-      <header className="p-6 relative z-10">
+      <header className="relative z-10 p-6">
         <button
           onClick={() => navigate("/")}
-          className="w-10 h-10 rounded-full bg-secondary border border-border/50 flex items-center justify-center hover:bg-secondary/80 transition-colors"
+          className="nexus-icon-button rounded-full"
         >
           <ChevronLeft className="w-5 h-5 text-primary" />
         </button>
       </header>
 
-      <main className="flex-1 px-6 pb-12 flex flex-col items-center justify-center relative z-10 max-w-sm mx-auto w-full">
+      <main className="relative z-10 mx-auto flex w-full max-w-sm flex-1 flex-col items-center justify-center px-6 pb-12">
 
         {/* Logo */}
         <motion.div
@@ -152,7 +282,7 @@ export default function AdminAuth() {
           initial={{ opacity: 0, y: 10 }}
           animate={{ opacity: 1, y: 0 }}
           transition={{ delay: 0.15 }}
-          className="w-full bg-card border border-border/50 rounded-2xl p-4 flex items-center justify-between mb-6"
+          className="nexus-panel mb-6 flex w-full items-center justify-between rounded-2xl p-4"
         >
           <div className="flex items-center gap-3">
             <div className="w-8 h-8 rounded-full bg-primary/10 flex items-center justify-center">
@@ -174,7 +304,7 @@ export default function AdminAuth() {
           initial={{ opacity: 0, y: 10 }}
           animate={{ opacity: 1, y: 0 }}
           transition={{ delay: 0.2 }}
-          className="flex bg-card p-1 rounded-2xl mb-5 w-full border border-border/50 relative"
+          className="relative mb-5 flex w-full rounded-2xl border border-border/50 bg-card/75 p-1"
         >
           {(["signin", "signup"] as const).map((tab) => (
             <button
@@ -206,7 +336,7 @@ export default function AdminAuth() {
               transition={{ duration: 0.2 }}
               className="w-full"
             >
-              <div className="bg-card border border-border/50 rounded-2xl p-6 space-y-5">
+              <div className="nexus-panel space-y-5 rounded-2xl p-6">
 
                 {/* Admin Code */}
                 <div>

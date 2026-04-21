@@ -108,6 +108,20 @@ export default function Wallet() {
         },
         theme: {
           color: "#000000"
+        },
+        config: {
+          display: {
+            blocks: {
+              upi: {
+                name: "Enter UPI ID",
+                instruments: [
+                  { method: "upi", flows: ["collect"] }
+                ]
+              }
+            },
+            sequence: ["block.upi"],
+            preferences: { show_default_blocks: true }
+          }
         }
       };
       
@@ -170,6 +184,20 @@ export default function Wallet() {
         },
         theme: {
           color: "#000000"
+        },
+        config: {
+          display: {
+            blocks: {
+              upi: {
+                name: "Enter UPI ID",
+                instruments: [
+                  { method: "upi", flows: ["collect"] }
+                ]
+              }
+            },
+            sequence: ["block.upi"],
+            preferences: { show_default_blocks: true }
+          }
         },
         modal: {
           ondismiss: function() {

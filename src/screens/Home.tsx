@@ -1,9 +1,13 @@
 import { motion } from "framer-motion";
-import { Bell, Shield, TrendingUp, AlertTriangle, ChevronRight, Activity, Zap, MapPin, Wallet as WalletIcon, Sun, Moon, CloudRain, ArrowRight, X, CheckCircle, Loader2, CreditCard, Smartphone } from "lucide-react";
+import { Bell, Shield, TrendingUp, AlertTriangle, ChevronRight, Activity, Zap, MapPin, Wallet as WalletIcon, Sun, Moon, CloudRain, ArrowRight, X, CheckCircle, Loader2, CreditCard, Smartphone, Wifi, ShieldCheck, Crown, Star, Lock } from "lucide-react";
 import { useNavigate } from "react-router-dom";
 import { cn } from "../lib/utils";
-import { useEffect, useState } from "react";
-import axios from "axios";
+import { useEffect, useState, useMemo, useCallback } from "react";
+import { useNexusConnectivity } from "../hooks/useNexusConnectivity";
+import { useNexusLocation } from "../hooks/useNexusLocation";
+import { useNexusTelemetry } from "../hooks/useNexusTelemetry";
+import { useNexusPolicy } from "../hooks/useNexusPolicy";
+import { apiClient } from "../lib/apiClient";
 import { useTheme } from "../components/theme-provider";
 import { syncOfflineClaims, getOfflineClaims } from "../lib/offlineQueue";
 import RiskAnalysis from "../components/RiskAnalysis";
@@ -16,31 +20,105 @@ import {
   syncWithServer,
   initRealtimeSubscription,
   getPolicyStatus,
-  getTotalProtectedEarnings
+  getTotalProtectedEarnings,
+  getConnectionStatus
 } from "../lib/payoutStore";
 import NotificationBell from "../components/NotificationBell";
+import { getDeviceStateSnapshot, registerForPushNotifications, requestCurrentLocation } from "../lib/deviceCapabilities";
+import {
+  deliverUnseenNotifications,
+  type NexusInboxResponse,
+} from "../lib/notifications";
 import {
   PREMIUM_PLANS,
   getActiveStoredTier,
   getUpgradeTiers,
   isPremiumActive,
+  savePlanToLocalStorage,
+  calculateDynamicPrice,
   type PlanTier,
 } from "../lib/premiumPlans";
+
+// ─── Plan metadata for display ────────────────────────────────────────────────
+const PLAN_DISPLAY = [
+  {
+    id: "basic" as PlanTier,
+    icon: <Shield size={24} />,
+    color: "blue",
+    accent: "text-blue-400",
+    bg: "bg-blue-400/10 border-blue-400/20",
+    recommended: false,
+    gradient: "from-blue-500/20 to-transparent",
+    features: [
+      "Up to ₹200 per disruption",
+      "2 claims per week",
+      "45-minute trigger threshold",
+      "Within 90 seconds settlement",
+      "72 hours waiting period",
+    ],
+    desc: "Low-risk zones, dry season workers",
+  },
+  {
+    id: "standard" as PlanTier,
+    icon: <Star size={24} />,
+    color: "primary",
+    accent: "text-primary",
+    bg: "bg-primary/10 border-primary/20",
+    recommended: true,
+    gradient: "from-primary/30 to-transparent",
+    features: [
+      "Up to ₹350 per disruption",
+      "3 claims per week",
+      "30-minute trigger threshold",
+      "Within 90 seconds settlement",
+      "48 hours waiting period",
+      "Storm Shield: Available",
+    ],
+    desc: "Most delivery workers, monsoon season",
+  },
+  {
+    id: "pro" as PlanTier,
+    icon: <Crown size={24} />,
+    color: "amber",
+    accent: "text-amber-400",
+    bg: "bg-amber-400/10 border-amber-400/20",
+    recommended: false,
+    gradient: "from-amber-400/20 to-transparent",
+    features: [
+      "Up to ₹580 per disruption",
+      "4 claims per week",
+      "20-minute trigger threshold",
+      "Within 60 seconds settlement",
+      "24 hours waiting period",
+      "Storm Shield: Included",
+      "Human adjuster within 6h",
+    ],
+    desc: "High earners, flood-prone zones",
+  },
+];
+import { getWorkerPartnerIdSnapshot } from "../lib/sessionIdentity";
 
 export default function Home() {
   const navigate = useNavigate();
   const { theme, setTheme } = useTheme();
   const isDark = theme === "dark";
-  const [weatherData, setWeatherData] = useState<any>(null);
+  const { 
+    lat, lon, zoneName: locationName, isApproximate, provenance: locProvenance, 
+    permissionState, requestPreciseLocation 
+  } = useNexusLocation();
+  const { weather, aqi, traffic, observedAt, rawJson, refresh: refreshTelemetry } = useNexusTelemetry(lat, lon);
+  const { syncStatus, signalStatus, systemMode, signalAgeSeconds, modeReason } = useNexusConnectivity(observedAt);
+  const policy = useNexusPolicy();
+
   const [premiumRate, setPremiumRate] = useState<number>(58);
-  const [location, setLocation] = useState<{lat: number, lon: number} | null>(null);
-  const [zoneName, setZoneName] = useState<string>("Locating...");
-  const [zoneId, setZoneId] = useState<string>("---");
-  const [locationError, setLocationError] = useState<string>("");
-  const [aqiData, setAqiData] = useState<any>(null);
-  const [trafficData, setTrafficData] = useState<any>(null);
   const [showPredictiveShield, setShowPredictiveShield] = useState(true);
   const [coverageCap, setCoverageCap] = useState<number>(480);
+  const [forecastData, setForecastData] = useState<any>(null);
+  const [deviceTrust, setDeviceTrust] = useState<any>(null);
+  const [inbox, setInbox] = useState<NexusInboxResponse | null>(null);
+  const [isRegisteringPush, setIsRegisteringPush] = useState(false);
+  const [offlineQueueCount, setOfflineQueueCount] = useState(0);
+  const [showAuditPanel, setShowAuditPanel] = useState(false);
 
   // ── Premium plan state (persisted 7-day window) ────────────────────
   const [activeTier, setActiveTier] = useState<PlanTier | null>(() => getActiveStoredTier());
@@ -48,7 +126,7 @@ export default function Home() {
 
   // ── Remaining state ────────────────────────────────────────────────
   const [isSyncing, setIsSyncing] = useState(false);
-  const [partnerId] = useState(() => localStorage.getItem("partner_id") || "");
+  const [partnerId] = useState(() => getWorkerPartnerIdSnapshot() || "");
   const [userProfile, setUserProfile] = useState<any>(null);
   const [walletBalance, setWalletBalance] = useState(getBalance());
   const [walletTransactions, setWalletTransactions] = useState<WalletTransaction[]>(getTransactions());
@@ -57,25 +135,81 @@ export default function Home() {
   const [showUpgradeModal, setShowUpgradeModal] = useState(false);
   const [upgradeStep, setUpgradeStep] = useState<1 | 2 | 3>(1);
   const [paymentMethod, setPaymentMethod] = useState<"wallet" | "upi" | "netbanking" | null>(null);
+  const [connectionStatus, setConnectionStatus] = useState(getConnectionStatus());
 
   // Refresh plan tier from localStorage after any wallet/sync event
   const refreshPlanState = () => {
     setActiveTier(getActiveStoredTier());
   };
+
+  // ── Handle plan purchase ────────────────────────────────────────────────────
+  const handleSelectPlan = (planId: PlanTier) => {
+    if (!upgradableTiers.includes(planId)) return; // guard
+    setIsProcessing(true);
+
+    const plan = PREMIUM_PLANS[planId];
+    // Use dynamic price calculated from telemetry
+    const dynamicPrice = calculateDynamicPrice(plan.price, weather, aqi, locationName);
+
+    const options = {
+      key: import.meta.env.VITE_RAZORPAY_KEY_ID || "rzp_test_SWnCTuOpDtQAgw",
+      amount: (dynamicPrice * 100).toString(),
+      currency: "INR",
+      name: "Nexus Sovereign",
+      description: `${plan.name} Shield — Weekly Coverage`,
+      handler: async function () {
+        setIsProcessing(true);
+        try {
+          const res = await apiClient.post("/api/premium/activate", {
+            partnerId,
+            planType: planId,
+          });
+          savePlanToLocalStorage(planId, res.data.premiumUntil);
+        } catch (err) {
+          console.error("Cloud activation failed, persisting locally:", err);
+          savePlanToLocalStorage(planId);
+        }
+        refreshPlanState();
+        setIsProcessing(false);
+      },
+      prefill: { name: userProfile?.full_name || "Delivery Partner", contact: userProfile?.phone || "9999999999" },
+      theme: { color: "#f59e0b" },
+      modal: { ondismiss: () => setIsProcessing(false) },
+    };
+
+    if (typeof (window as any).Razorpay === "undefined") {
+      alert("Razorpay SDK not loaded. Check your internet connection.");
+      setIsProcessing(false);
+      return;
+    }
+
+    const rzp = new (window as any).Razorpay(options);
+    rzp.on("payment.failed", (r: any) => {
+      alert("Payment Failed: " + r.error.description);
+      setIsProcessing(false);
+    });
+    rzp.open();
+  };
   
   // 1. EVENT LISTENERS (Established earliest to catch immediate sync results)
   useEffect(() => {
     const refreshWallet = () => {
-      setWalletBalance(getBalance());
-      setWalletTransactions(getTransactions());
-      refreshPlanState(); // also refresh plan on every wallet event
+      const balance = getBalance();
+      const transactions = getTransactions();
       
-      // Also sync user profile from localStorage if present
+      setWalletBalance(prev => (prev === balance ? prev : balance));
+      setWalletTransactions(prev => (JSON.stringify(prev) === JSON.stringify(transactions) ? prev : transactions));
+      refreshPlanState(); 
+
       const phone = localStorage.getItem("signin_phone");
       const platform = localStorage.getItem("signin_platform");
       const name = localStorage.getItem("nexus_profile_name");
-      if (phone || platform) {
-        setUserProfile({ phone, platform, name });
+      
+      if (phone || platform || name) {
+        setUserProfile((prev: any) => {
+          if (prev?.phone === phone && prev?.platform === platform && prev?.name === name) return prev;
+          return { phone, platform, name };
+        });
       }
     };
 
@@ -92,12 +226,18 @@ export default function Home() {
     // Pulse local UI but don't do server sync here anymore (MainLayout handles it)
     const pollLocalInterval = setInterval(() => {
         refreshWallet();
-    }, 5000);
+    }, 15000); // Pulse every 15s instead of 5s
+
+    const handleConnectionUpdate = () => {
+      setConnectionStatus(getConnectionStatus());
+    };
+    window.addEventListener("nexus-connection-update", handleConnectionUpdate);
 
     return () => {
       window.removeEventListener("nexus-payout-update", refreshWallet);
       window.removeEventListener("storage", refreshWallet);
       window.removeEventListener("focus", refreshWallet);
+      window.removeEventListener("nexus-connection-update", handleConnectionUpdate);
       clearInterval(pollLocalInterval);
     };
   }, []);
@@ -113,150 +253,120 @@ export default function Home() {
   const upgradableTiers = getUpgradeTiers(activeTier);
   const canUpgrade = upgradableTiers.length > 0;
 
-  const handleRazorpayPayment = () => {
-    // Plan purchasing is handled in CoveragePlans.tsx
-    // This modal is kept for inline upgrades that may be triggered from Home
-    setIsProcessing(true);
-    const options = {
-      key: import.meta.env.VITE_RAZORPAY_KEY_ID || "rzp_test_SWnCTuOpDtQAgw",
-      amount: "1500",
-      currency: "INR",
-      name: "Nexus Sovereign",
-      description: "Premium Shield Upgrade (+₹500 Coverage)",
-      handler: async function () {
-        setIsProcessing(true);
-        try {
-          if (partnerId) {
-            await axios.post("/api/premium/activate", { partnerId, planType: "basic" });
-          }
-          localStorage.setItem("nexus_premium_upgraded", "true");
-          setUpgradeStep(3);
-          refreshPlanState();
-        } catch (err) {
-          console.error("Cloud activation failed:", err);
-          setUpgradeStep(3);
-          refreshPlanState();
-        } finally {
-          setIsProcessing(false);
-        }
-      },
-      prefill: { name: userProfile?.full_name || "Nexus Rider", contact: userProfile?.phone || "9999999999", email: `${partnerId}@nexus.sovereign` },
-      theme: { color: "#6366f1" },
-      modal: { ondismiss: () => setIsProcessing(false) }
+  useEffect(() => {
+    let isMounted = true;
+    const refreshQueue = async () => {
+      const claims = await getOfflineClaims();
+      if (isMounted) {
+        setOfflineQueueCount(claims.length);
+      }
     };
-    if (typeof (window as any).Razorpay === 'undefined') {
-      alert("Razorpay SDK not loaded.");
-      setIsProcessing(false);
-      return;
-    }
-    const rzp = new (window as any).Razorpay(options);
-    rzp.open();
-  };
 
-  // 4. Offline Sync
+    const handleQueueUpdate = (event: Event) => {
+      const detail = (event as CustomEvent<{ count?: number }>).detail;
+      if (typeof detail?.count === "number") {
+        setOfflineQueueCount(detail.count);
+        return;
+      }
+      void refreshQueue();
+    };
+
+    void refreshQueue();
+    window.addEventListener("nexus-offline-queue-update", handleQueueUpdate as EventListener);
+    return () => {
+      isMounted = false;
+      window.removeEventListener("nexus-offline-queue-update", handleQueueUpdate as EventListener);
+    };
+  }, []);
+
+  // 5. Offline Sync
   useEffect(() => {
     const handleOnline = async () => {
-      const claims = getOfflineClaims();
-      if (claims.length > 0) {
-        await syncOfflineClaims();
+      const result = await syncOfflineClaims();
+      setOfflineQueueCount(result.remaining);
+      if (result.syncedCount > 0 && partnerId) {
+        await syncWithServer(partnerId, "offline-replay");
       }
     };
     window.addEventListener('online', handleOnline);
     if (navigator.onLine) handleOnline();
     return () => window.removeEventListener('online', handleOnline);
-  }, []);
+  }, [partnerId]);
 
-  // 5. Geolocation Accessor
   useEffect(() => {
-    if (!navigator.geolocation) {
-      setLocation({ lat: 12.9716, lon: 77.5946 });
-      return;
-    }
+    if (!partnerId) return;
 
-    const watchId = navigator.geolocation.watchPosition(
-      (pos) => setLocation({ lat: pos.coords.latitude, lon: pos.coords.longitude }),
-      () => setLocation({ lat: 12.9716, lon: 77.5946 }),
-      { enableHighAccuracy: true, maximumAge: 0, timeout: 10000 }
-    );
-    return () => navigator.geolocation.clearWatch(watchId);
-  }, []);
+    let isMounted = true;
 
-  // 6. Location Sync Heartbeat
-  useEffect(() => {
-    if (!location || !partnerId) return;
-    const sync = () => axios.post("/api/user/location", { partnerId, lat: location.lat, lng: location.lon }).catch(() => {});
-    sync();
-    const id = setInterval(sync, 30000);
-    return () => clearInterval(id);
-  }, [location?.lat, location?.lon, partnerId]);
-
-  // 7. Core Risk Data Fetching
-  useEffect(() => {
-    if (!location) return;
-
-    const fetchData = async () => {
+    const syncCrossPlatformState = async () => {
       try {
-        const { lat, lon } = location;
-        const mapboxToken = import.meta.env.VITE_MAPBOX_TOKEN;
-        
-        if (mapboxToken && mapboxToken !== 'placeholder_mapbox_token') {
-          const res = await axios.get(`https://api.mapbox.com/geocoding/v5/mapbox.places/${lon},${lat}.json?access_token=${mapboxToken}&types=neighborhood,locality,place`);
-          if (res.data.features?.[0]) {
-            setZoneName(res.data.features[0].text);
-            setZoneId(`H3-${Math.abs(lat).toFixed(2).slice(-2)}${Math.abs(lon).toFixed(2).slice(-2)}`);
-          }
-        }
-
-        const [weather, aqi, traffic] = await Promise.all([
-          axios.get(`/api/weather?lat=${lat}&lon=${lon}`),
-          axios.get(`/api/aqi?lat=${lat}&lon=${lon}`),
-          axios.get(`/api/traffic?lat=${lat}&lon=${lon}`)
+        const snapshot = await getDeviceStateSnapshot();
+        const [deviceStateRes, inboxRes] = await Promise.all([
+          apiClient.post("/api/user/device-state", snapshot),
+          apiClient.get(`/api/user/inbox?partnerId=${partnerId}`),
         ]);
 
-        setWeatherData(weather.data);
-        setAqiData(aqi.data);
-        setTrafficData(traffic.data);
-
-        // Premium Calculation
-        const premiumRes = await axios.post('/api/ml/calculate-premium', {
-          zone_h3: "8760a0000ffffff",
-          persona: localStorage.getItem("signin_platform") || "blinkit",
-          trust_score: Number(userProfile?.trust_score || localStorage.getItem("nexus_trust_score") || 0.5),
-          weather_severity: weather?.data?.weather?.[0]?.main === 'Rain' ? 0.8 : 0.1,
-          traffic_density: (traffic?.data?.jamFactor || 0) / 10,
-          aqi_severity: (aqi?.data?.aqi || 0) / 300,
-          trigger_type: weather?.data?.weather?.[0]?.main === 'Rain' ? 'rain' : 'heat',
-          weeks_enrolled: 12,
-          declared_earnings: Number(localStorage.getItem("nexus_declared_earnings") || 650)
-        });
-
-        if (premiumRes.data.premium) {
-          setPremiumRate(premiumRes.data.premium);
-          setCoverageCap(premiumRes.data.coverage_cap);
-        }
-      } catch (err) {
-        console.error("Risk data update failed:", err);
+        if (!isMounted) return;
+        setDeviceTrust(deviceStateRes.data?.trust || null);
+        setInbox(inboxRes.data || null);
+      } catch (error) {
+        console.warn("Cross-platform state bootstrap failed", error);
       }
     };
-    fetchData();
-  }, [location?.lat, location?.lon]);
 
-  const weatherDisplay = weatherData?.weather?.[0]?.main === "Rain" 
-    ? { text: "Rain (+50%)", color: "text-amber-500" } 
-    : { text: "Clear (+0%)", color: "text-emerald-500" };
+    void syncCrossPlatformState();
 
-  const trafficDisplay = (trafficData?.jamFactor || 0) > 7 
-    ? { text: "Heavy (+15%)", color: "text-destructive" }
-    : { text: "Light (+0%)", color: "text-emerald-500" };
+    return () => {
+      isMounted = false;
+    };
+  }, [partnerId]);
 
-  const aqiDisplay = (aqiData?.aqi || 0) > 150 
-    ? { text: `Poor (${aqiData?.aqi || 0})`, color: "text-destructive" }
-    : { text: `Good (${aqiData?.aqi || 0})`, color: "text-emerald-500" };
+  useEffect(() => {
+    if (!inbox?.items?.length) return;
 
+    const nonPayoutItems = inbox.items.filter((item) => item.kind !== "payout");
+    if (nonPayoutItems.length > 0) {
+      void deliverUnseenNotifications(nonPayoutItems, { limit: 2 });
+    }
+    window.dispatchEvent(
+      new CustomEvent("nexus-inbox-update", {
+        detail: { count: inbox.unreadCount || inbox.items.length },
+      })
+    );
+  }, [inbox]);
+
+  // 8. Forecast & Premium Sync
+  useEffect(() => {
+    if (!lat || !lon || !partnerId) return;
+
+    const fetchForecast = async () => {
+      try {
+        const forecastRes = await apiClient.post("/api/verify/forecast", {
+          partnerId,
+          lat,
+          lon,
+        });
+        setForecastData(forecastRes.data || null);
+        
+        if (forecastRes.data?.premium) {
+            setPremiumRate(forecastRes.data.premium.weekly || 58);
+        }
+      } catch (err) {
+        console.error("Forecast update failed:", err);
+      }
+    };
+    fetchForecast();
+  }, [lat, lon, partnerId]);
+
+  const isRain = weather?.label === "Rain";
+  const firstName =
+    userProfile?.full_name?.split(" ")?.[0] ||
+    userProfile?.name?.split(" ")?.[0] ||
+    "Operator";
 
   return (
-    <div className="min-h-full bg-background flex flex-col">
-      <header className="flex items-center justify-between p-4 border-b border-border/10 sticky top-0 bg-background/95 backdrop-blur-md z-40">
+    <div className="min-h-full flex flex-col">
+      <header className="nexus-page-header">
         <div className="flex items-center gap-3">
           <div 
             className="w-10 h-10 bg-primary/20 rounded-xl flex items-center justify-center border border-primary/30 overflow-hidden cursor-pointer active:scale-95 transition-transform"
@@ -269,27 +379,24 @@ export default function Home() {
             )}
           </div>
           <div>
-            <h1 className="font-bold tracking-tight leading-none mb-1">
-              {userProfile?.full_name ? `Hello, ${userProfile.full_name.split(' ')[0]}` : "Nexus Sovereign"}
+            <h1 className="nexus-page-title">
+              {userProfile?.full_name ? `Hello, ${firstName}` : "Nexus Sovereign"}
             </h1>
             <div className="flex items-center gap-2">
-              <p className="text-[10px] text-emerald-500 font-bold uppercase tracking-wider flex items-center gap-1">
-                <span className="w-1.5 h-1.5 rounded-full bg-emerald-500 animate-pulse" />
-                Active Shield
+              <p className={cn("text-[11px] font-bold uppercase tracking-[0.18em] flex items-center gap-1.5", policy.isActive ? "text-emerald-500" : "text-amber-500")}>
+                <span className={cn("w-1.5 h-1.5 rounded-full", policy.isActive ? "bg-emerald-500 animate-pulse" : "bg-amber-500")} />
+                {policy.isActive ? "Active Shield" : "Shield Inactive"}
               </p>
-              {isSyncing && (
-                <div className="flex items-center gap-1">
-                  <Loader2 className="w-2.5 h-2.5 text-primary animate-spin" />
-                  <span className="text-[9px] text-muted-foreground font-medium animate-pulse">Syncing...</span>
-                </div>
-              )}
+              <span className="text-[9px] px-1.5 py-0.5 rounded bg-muted/50 text-muted-foreground font-mono">
+                {policy.daysLeft}d left
+              </span>
             </div>
           </div>
         </div>
         <div className="flex items-center gap-2">
           <button
             onClick={() => setTheme(isDark ? "light" : "dark")}
-            className="p-2.5 bg-secondary/50 hover:bg-secondary rounded-xl transition-all active:scale-95"
+            className="nexus-icon-button"
             aria-label="Toggle theme"
           >
             {isDark ? <Sun size={20} /> : <Moon size={20} />}
@@ -298,445 +405,286 @@ export default function Home() {
         </div>
       </header>
 
-      <main className="flex-1 p-4 space-y-6">
-        {/* Predictive Shield Notification */}
-        {showPredictiveShield && (
-          <motion.div
-            initial={{ opacity: 0, y: -20 }}
-            animate={{ opacity: 1, y: 0 }}
-            className={cn(
-              "rounded-2xl p-4 relative overflow-hidden border",
-              activeTier === "pro"
-                ? "bg-gradient-to-r from-amber-500/20 to-amber-600/20 border-amber-500/30"
-                : hasUpgraded
-                ? "bg-gradient-to-r from-emerald-500/20 to-emerald-600/20 border-emerald-500/30"
-                : "bg-gradient-to-r from-indigo-500/20 to-purple-500/20 border-indigo-500/30"
-            )}
-          >
-            <button 
-              onClick={() => setShowPredictiveShield(false)}
-              className="absolute top-2 right-2 p-1 text-muted-foreground hover:text-foreground"
-            >
-              <X size={14} />
-            </button>
-            <div className="flex items-start gap-3">
-              <div className={cn(
-                "w-10 h-10 rounded-full flex items-center justify-center shrink-0",
-                activeTier === "pro" ? "bg-amber-500/20" : hasUpgraded ? "bg-emerald-500/20" : "bg-indigo-500/20"
-              )}>
-                {activeTier === "pro"
-                  ? <CheckCircle className="w-5 h-5 text-amber-400" />
-                  : hasUpgraded
-                  ? <CheckCircle className="w-5 h-5 text-emerald-500" />
-                  : <CloudRain className="w-5 h-5 text-indigo-400" />
-                }
-              </div>
-              <div>
-                <h3 className="font-bold text-sm flex items-center gap-1">
-                  Predictive Shield <Zap size={12} className="text-amber-400" />
-                </h3>
-                {activeTier === "pro" ? (
-                  <div className="flex items-center gap-1.5 mt-2">
-                    <CheckCircle size={14} className="text-amber-400" />
-                    <span className="text-sm font-bold text-amber-400">Pro Shield Active — Maximum Protection</span>
-                  </div>
-                ) : hasUpgraded ? (
-                  <>
-                    <div className="flex items-center gap-1.5 mt-1 mb-2">
-                      <CheckCircle size={14} className="text-emerald-500" />
-                      <span className="text-sm font-bold text-emerald-500">
-                        {activeTier ? PREMIUM_PLANS[activeTier].name : ""} Plan Active
-                      </span>
-                    </div>
-                    {canUpgrade && (
-                      <button
-                        onClick={() => navigate("/coverage-plans")}
-                        className="bg-primary/20 hover:bg-primary/30 text-primary text-xs font-bold py-1.5 px-3 rounded-lg transition-colors"
-                      >
-                        Upgrade to {upgradableTiers[upgradableTiers.length - 1].charAt(0).toUpperCase() + upgradableTiers[upgradableTiers.length - 1].slice(1)} →
-                      </button>
-                    )}
-                  </>
-                ) : (
-                  <>
-                    <p className="text-xs text-muted-foreground mt-1 mb-3">
-                      Heavy rain forecasted for your zone tomorrow (80% probability). Upgrade coverage by ₹15 to protect ₹2,500 earnings.
-                    </p>
-                    <button
-                      onClick={() => navigate("/coverage-plans")}
-                      className="bg-indigo-500 hover:bg-indigo-600 text-white text-xs font-bold py-2 px-4 rounded-lg transition-colors"
-                    >
-                      Upgrade Coverage
-                    </button>
-                  </>
-                )}
-              </div>
-            </div>
-          </motion.div>
-        )}
-
-        {/* Hero Card */}
-        <motion.div
-          initial={{ opacity: 0, y: 20 }}
-          animate={{ opacity: 1, y: 0 }}
-          className="relative overflow-hidden rounded-3xl bg-card border border-border/50 p-6 shadow-sm"
-        >
-          <div className="absolute top-0 right-0 w-32 h-32 bg-primary/10 rounded-full blur-3xl -mr-10 -mt-10" />
+      <main className="nexus-app-main space-y-6 pb-8">
+        <section className="nexus-panel-hero p-6 md:p-8 lg:p-10 relative overflow-hidden">
+          <div className="absolute top-0 right-0 h-40 w-40 rounded-full bg-primary/10 blur-3xl -mr-10 -mt-10" />
           
-          <div className="flex justify-between items-start mb-6 relative z-10">
-            <div>
-              <p className="text-xs font-bold text-muted-foreground uppercase tracking-wider mb-1">Protected Earnings</p>
-              <h2 className="text-4xl font-bold tracking-tight flex items-baseline gap-1">
-                <span className="text-primary">₹</span>{getTotalProtectedEarnings().toLocaleString()}
-              </h2>
+          <div className="relative z-10">
+            <div className="flex items-center gap-2 mb-4">
+              <span className="h-1.5 w-1.5 rounded-full bg-emerald-500 animate-pulse" />
+              <div className="text-[10px] font-black uppercase tracking-[0.2em] text-primary/80">Signal Fabric active</div>
             </div>
-            <div className="w-12 h-12 rounded-2xl bg-primary/10 flex items-center justify-center border border-primary/20">
-              <Shield className="w-6 h-6 text-primary" />
+            <h1 className="text-4xl md:text-5xl lg:text-6xl font-black text-foreground tracking-tighter leading-[0.95]">
+              Monitoring the <br /> 
+              <span className="text-primary italic">Signal Fabric</span>
+            </h1>
+            <p className="mt-6 text-sm md:text-base text-muted-foreground leading-relaxed max-w-xl font-medium">
+              Real-time parametric protection powered by global satellites and local sensor networks. Your income is secured by the Nexus Sovereign Event Twins.
+            </p>
+            
+            <div className="mt-10 grid grid-cols-1 md:grid-cols-3 gap-4">
+              {[
+                { label: 'Signal Freshness', value: '42ms', sub: 'OpenWeather Sync', icon: Wifi, color: 'text-emerald-500' },
+                { label: 'Event Twins Live', value: '3', sub: 'Regional Disruptions', icon: Zap, color: 'text-primary' },
+                { label: 'Protection Capacity', value: 'Rs 4.2L', sub: 'Available Reserve', icon: ShieldCheck, color: 'text-blue-500' },
+              ].map((kpi, idx) => {
+                const Icon = kpi.icon;
+                return (
+                  <div key={idx} className="nexus-panel rounded-2xl p-5 border border-border/40 hover:border-primary/20 transition-all flex items-center justify-between group bg-background/40 backdrop-blur-sm">
+                    <div>
+                      <p className="text-[10px] font-bold uppercase tracking-widest text-muted-foreground mb-1">{kpi.label}</p>
+                      <p className="text-2xl font-black text-foreground tracking-tighter">{kpi.value}</p>
+                      <p className="text-[10px] text-muted-foreground/60 mt-1 font-medium">{kpi.sub}</p>
+                    </div>
+                    <div className={cn("p-4 rounded-2xl bg-secondary group-hover:bg-primary/5 transition-colors", kpi.color)}>
+                      <Icon size={24} />
+                    </div>
+                  </div>
+                );
+              })}
             </div>
           </div>
+        </section>
 
-          <div className="grid grid-cols-2 gap-4 relative z-10">
-            <div className="bg-secondary/50 rounded-2xl p-3 border border-border/50">
-              <div className="flex items-center gap-2 mb-1">
-                <TrendingUp size={14} className="text-emerald-500" />
-                <span className="text-[10px] font-bold text-muted-foreground uppercase tracking-wider">Est. Payout</span>
+        <div className="grid gap-6 xl:grid-cols-[1.2fr_0.8fr]">
+          <section className="nexus-panel p-6 space-y-8">
+            <div className="flex flex-wrap items-start justify-between gap-5">
+              <div className="max-w-xl">
+                <div className="nexus-section-eyebrow mb-2">Earnings coverage</div>
+                <h2 className="text-4xl font-black tracking-[-0.05em] text-foreground">
+                  Rs {getTotalProtectedEarnings().toLocaleString()}
+                </h2>
+                <p className="mt-2 text-sm text-muted-foreground font-medium">
+                  Total protected income across current policy winndows.
+                </p>
               </div>
-              <p className="text-lg font-semibold">₹1,200/day</p>
-            </div>
-            <div className="bg-secondary/50 rounded-2xl p-3 border border-border/50">
-              <div className="flex items-center gap-2 mb-1">
-                <Activity size={14} className="text-blue-500" />
-                <span className="text-[10px] font-bold text-muted-foreground uppercase tracking-wider">Coverage</span>
-              </div>
-              <p className="text-lg font-semibold">98.5%</p>
-            </div>
-          </div>
-        </motion.div>
-
-        {/* Dynamic Risk Assessment */}
-        <motion.div
-          initial={{ opacity: 0, y: 20 }}
-          animate={{ opacity: 1, y: 0 }}
-          transition={{ delay: 0.1 }}
-          className="rounded-3xl bg-card border border-border/50 p-5 shadow-sm"
-        >
-          <div className="flex items-center justify-between mb-4">
-            <h3 className="font-bold text-lg flex items-center gap-2">
-              <Zap size={18} className="text-primary" />
-              Live Risk Oracle
-            </h3>
-            <span className="text-xs font-bold px-2 py-1 rounded-md bg-emerald-500/10 text-emerald-500 uppercase tracking-wider">
-              Low Risk
-            </span>
-          </div>
-
-          <div className="space-y-4">
-            <div className="flex items-center justify-between text-sm">
-              <span className="text-muted-foreground flex items-center gap-1">
-                <MapPin size={14} />
-                Current Zone ({zoneId})
-              </span>
-              <div className="flex flex-col items-end">
-                <span className="font-medium">{zoneName}</span>
-                {locationError && <span className="text-[10px] text-amber-500">{locationError}</span>}
+              <div className="flex flex-col gap-2 items-end">
+                <span className="nexus-inline-metric text-emerald-500 bg-emerald-500/10 border-emerald-500/20 px-3 py-1">
+                  <Shield size={12} />
+                  Tier 3 Secure
+                </span>
+                <span className="text-[10px] text-muted-foreground/50 font-mono">ID: {partnerId.slice(0, 8)}</span>
               </div>
             </div>
-            <div className="flex items-center justify-between text-sm group relative">
-              <span className="text-muted-foreground flex items-center gap-1">
-                Weather Impact
-                <div className="relative">
-                  <Zap size={12} className="text-muted-foreground cursor-help" />
-                  <div className="absolute left-full ml-2 top-0 w-48 p-2 bg-popover text-popover-foreground text-xs rounded-lg shadow-lg opacity-0 group-hover:opacity-100 transition-opacity z-20 border border-border">
-                    Higher impact during rain or storms increases risk.
-                  </div>
-                </div>
-              </span>
-              <span className={cn("font-medium", weatherDisplay.color)}>{weatherDisplay.text}</span>
-            </div>
-            <div className="flex items-center justify-between text-sm group relative">
-              <span className="text-muted-foreground flex items-center gap-1">
-                Traffic Density
-                <div className="relative">
-                  <Zap size={12} className="text-muted-foreground cursor-help" />
-                  <div className="absolute left-full ml-2 top-0 w-48 p-2 bg-popover text-popover-foreground text-xs rounded-lg shadow-lg opacity-0 group-hover:opacity-100 transition-opacity z-20 border border-border">
-                    Higher traffic density increases collision risk.
-                  </div>
-                </div>
-              </span>
-              <span className={cn("font-medium", trafficDisplay.color)}>{trafficDisplay.text}</span>
-            </div>
-            <div className="flex items-center justify-between text-sm group relative">
-              <span className="text-muted-foreground flex items-center gap-1">
-                Air Quality (AQI)
-                <div className="relative">
-                  <Zap size={12} className="text-muted-foreground cursor-help" />
-                  <div className="absolute left-full ml-2 top-0 w-48 p-2 bg-popover text-popover-foreground text-xs rounded-lg shadow-lg opacity-0 group-hover:opacity-100 transition-opacity z-20 border border-border">
-                    Poor air quality may impact health and increase claim risk.
-                  </div>
-                </div>
-              </span>
-              <span className={cn("font-medium", aqiDisplay.color)}>{aqiDisplay.text}</span>
+
+            <div className="grid gap-4 sm:grid-cols-3">
+              <div className="nexus-kpi-card bg-secondary/20 border-border/40">
+                <p className="nexus-kpi-label">Weekly premium</p>
+                <div className="nexus-kpi-value text-primary mt-1">Rs {displayPremium.toFixed(0)}</div>
+                <p className="nexus-kpi-meta mt-2">Adaptive rate active</p>
+              </div>
+              <div className="nexus-kpi-card bg-secondary/20 border-border/40">
+                <p className="nexus-kpi-label">Coverage cap</p>
+                <div className="nexus-kpi-value mt-1">Rs {displayCoverage}</div>
+                <p className="nexus-kpi-meta mt-2">Per event protection</p>
+              </div>
+              <div className="nexus-kpi-card bg-secondary/20 border-border/40">
+                <p className="nexus-kpi-label">Wallet balance</p>
+                <div className="nexus-kpi-value mt-1">Rs {walletBalance.toFixed(0)}</div>
+                <p className="nexus-kpi-meta mt-2">Available for payout</p>
+              </div>
             </div>
             
-            <div className="pt-4 border-t border-border/50">
-              <div className="flex justify-between items-end mb-2">
-                <span className="text-xs font-bold text-muted-foreground uppercase tracking-wider text-emerald-500">Actuarial Premium</span>
-                <span className="text-lg font-bold text-primary">₹{displayPremium.toFixed(0)}/week</span>
+            <div className="pt-4 flex gap-3">
+              <button 
+                onClick={() => navigate("/file-claim")}
+                className="nexus-button-primary flex-1"
+              >
+                File Protection Claim
+              </button>
+              <button 
+                onClick={() => navigate("/wallet")}
+                className="nexus-button-secondary flex-1"
+              >
+                Withdraw Funds
+              </button>
+            </div>
+          </section>
+
+          <section className="nexus-panel p-6 border border-border/40 relative overflow-hidden">
+            <div className="flex items-start justify-between mb-6">
+              <div>
+                <div className="nexus-section-eyebrow mb-2">Protection Twin</div>
+                <h3 className="text-xl font-bold tracking-tight">Signal Fabric Monitor</h3>
               </div>
-              <div className="flex justify-between items-end mb-2">
-                <span className="text-xs font-bold text-muted-foreground uppercase tracking-wider">Max Coverage Cap</span>
-                <span className="text-sm font-bold text-primary">₹{displayCoverage}</span>
-              </div>
-              {!hasUpgraded ? (
-                <button 
-                  onClick={() => navigate("/coverage-plans")}
-                  className="w-full mt-2 text-xs font-bold text-primary hover:text-primary/80 flex items-center justify-center gap-1"
-                >
-                  Explore Upgrade Options <ChevronRight size={12} />
-                </button>
-              ) : (
-                <div className="w-full mt-2 text-xs font-bold text-emerald-500 flex items-center justify-center gap-1">
-                  Weekly premium upgraded <CheckCircle size={12} />
+              <div className="flex flex-col items-end gap-1">
+                <div className={cn(
+                  "flex items-center gap-2 px-3 py-1 rounded-full border",
+                  systemMode === "Live" ? "bg-emerald-500/10 border-emerald-500/20 text-emerald-500" : "bg-amber-500/10 border-amber-500/20 text-amber-500"
+                )}>
+                  <span className={cn("w-1.5 h-1.5 rounded-full", systemMode === "Live" ? "bg-emerald-500 animate-pulse" : "bg-amber-500")} />
+                  <span className="text-[10px] font-black uppercase tracking-widest">{systemMode}</span>
                 </div>
+              </div>
+            </div>
+
+            <div className="space-y-4">
+              <div className="nexus-subpanel p-4 rounded-2xl border-border/30">
+                <p className="nexus-kpi-label">Current Location</p>
+                <p className="text-sm font-bold mt-1">{locationName}</p>
+                <div className="mt-2 flex items-center justify-between">
+                  <span className="text-[10px] text-muted-foreground uppercase font-black">{locProvenance} Sync</span>
+                  <MapPin size={14} className="text-primary/40" />
+                </div>
+              </div>
+
+              <div className="grid grid-cols-2 gap-3">
+                <div className="nexus-subpanel p-4 rounded-2xl border-border/30">
+                  <p className="nexus-kpi-label">Weather</p>
+                  <p className={cn("text-sm font-bold mt-1", weather?.impact === 'Severe' ? 'text-destructive' : 'text-foreground')}>
+                    {weather?.value || '--'}
+                  </p>
+                  <p className="text-[9px] text-muted-foreground mt-2 uppercase font-bold">{weather?.impact || 'Stable'}</p>
+                </div>
+                <div className="nexus-subpanel p-4 rounded-2xl border-border/30">
+                  <p className="nexus-kpi-label">Traffic</p>
+                  <p className={cn("text-sm font-bold mt-1", traffic?.impact === 'Severe' ? 'text-destructive' : 'text-foreground')}>
+                    {traffic?.value ? `JF ${traffic.value}` : '--'}
+                  </p>
+                  <p className="text-[9px] text-muted-foreground mt-2 uppercase font-bold">{traffic?.impact || 'Stable'}</p>
+                </div>
+              </div>
+
+              <button 
+                onClick={() => setShowAuditPanel(!showAuditPanel)}
+                className="w-full py-3 rounded-xl border border-primary/20 text-[10px] font-black uppercase tracking-widest text-primary hover:bg-primary/5 transition-all text-center mt-2"
+              >
+                {showAuditPanel ? "Hide Raw Trace" : "View Signal Fabric Trace"}
+              </button>
+
+              {showAuditPanel && (
+                <pre className="mt-4 p-4 rounded-xl bg-black/5 dark:bg-black/40 text-[9px] font-mono text-muted-foreground overflow-auto max-h-40 scrollbar-hide">
+                  {JSON.stringify(rawJson || { status: 'Waiting for heartbeat...' }, null, 2)}
+                </pre>
               )}
-              <div className="h-1.5 w-full bg-secondary rounded-full overflow-hidden mt-2">
-                <div className="h-full bg-primary w-[20%]" />
-              </div>
             </div>
-          </div>
-        </motion.div>
-
-        <RiskAnalysis 
-          weatherData={weatherData}
-          aqiData={aqiData}
-          trafficData={trafficData}
-          location={location}
-        />
-
-        {/* Quick Actions */}
-        <div className="grid grid-cols-3 gap-4">
-          <button
-            onClick={() => navigate("/claims")}
-            className="bg-card border border-border/50 rounded-2xl p-4 flex flex-col items-center justify-center gap-3 hover:border-primary/50 transition-colors shadow-sm"
-          >
-            <div className="w-10 h-10 rounded-full bg-destructive/10 flex items-center justify-center text-destructive">
-              <AlertTriangle size={20} />
-            </div>
-            <span className="font-semibold text-xs text-center">Claims Center</span>
-          </button>
-          <button
-            onClick={() => navigate("/coverage")}
-            className="bg-card border border-border/50 rounded-2xl p-4 flex flex-col items-center justify-center gap-3 hover:border-primary/50 transition-colors shadow-sm"
-          >
-            <div className="w-10 h-10 rounded-full bg-blue-500/10 flex items-center justify-center text-blue-500">
-              <Shield size={20} />
-            </div>
-            <span className="font-semibold text-xs text-center">View Policy</span>
-          </button>
-          <button
-            onClick={() => navigate("/wallet")}
-            className="bg-card border border-border/50 rounded-2xl p-4 flex flex-col items-center justify-center gap-3 hover:border-primary/50 transition-colors shadow-sm"
-          >
-            <div className="w-10 h-10 rounded-full bg-emerald-500/10 flex items-center justify-center text-emerald-500">
-              <WalletIcon size={20} />
-            </div>
-            <span className="font-semibold text-xs text-center">Wallet</span>
-          </button>
+          </section>
         </div>
 
-        {/* Recent Activity */}
-        <div className="mb-6">
-          <div className="flex items-center justify-between mb-4">
-            <h3 className="font-bold text-lg">Recent Activity</h3>
-            <button className="text-xs font-bold text-primary uppercase tracking-wider flex items-center">
-              View All <ChevronRight size={14} />
-            </button>
-          </div>
-          
-          <div className="space-y-3">
-            {(() => {
-              // Compute dynamic recent activity from live wallet/premium state
-              const latestDebit = walletTransactions.find(t => t.type === "debit");
-              const latestCredit = walletTransactions.find(t => t.type === "credit");
-              
-               const policyStatus = getPolicyStatus();
-               const validTill = policyStatus.validTill;
-               const isActive = policyStatus.isActive;
-
-               const activityItems = [
-                { 
-                  title: "Weekly Policy Active", 
-                  desc: `Term: 3 Months • Valid till ${validTill}`, 
-                  time: isActive ? "Active" : "Expired", 
-                  icon: "🛡️", 
-                  color: isActive ? "bg-emerald-500/10 text-emerald-500" : "bg-destructive/10 text-destructive" 
-                },
-                { 
-                  title: "Weekly Premium Deducted", 
-                  desc: latestDebit 
-                    ? `₹${Number(latestDebit?.amount || 0).toFixed(2)} • Wallet Balance` 
-                    : `₹${(premiumRate * 24).toFixed(2)} • Wallet Balance`, 
-                  time: latestDebit?.date?.split(",")[0] || "Monday", 
-                  icon: "💸", 
-                  color: "bg-destructive/10 text-destructive" 
-                },
-                { 
-                  title: latestCredit ? latestCredit.title : "Claim Approved", 
-                  desc: latestCredit 
-                    ? `${latestCredit.desc?.split("•")[0]?.trim()} • ₹${Number(latestCredit?.amount || 0).toFixed(2)}` 
-                    : "Heatwave Alert • ₹239.00", 
-                  time: latestCredit?.date?.split(",")[0] || "Last Week", 
-                  icon: "✅", 
-                  color: "bg-primary/10 text-primary" 
-                },
-              ];
-
-              return activityItems.map((item, i) => (
-              <div key={i} className="flex items-center gap-4 p-3 rounded-2xl bg-card border border-border/50">
-                <div className={cn("w-10 h-10 rounded-xl flex items-center justify-center text-lg shrink-0", item.color)}>
-                  {item.icon}
-                </div>
-                <div className="flex-1 min-w-0">
-                  <h4 className="font-semibold text-sm truncate">{item.title}</h4>
-                  <p className="text-xs text-muted-foreground truncate">{item.desc}</p>
-                </div>
-                <span className="text-[10px] font-medium text-muted-foreground shrink-0">{item.time}</span>
+        {/* Dynamic Premium Tiers Section */}
+        <section className="mt-8 mb-6">
+          <div className="flex flex-col md:flex-row md:items-end justify-between gap-6 mb-8">
+            <div className="max-w-2xl">
+              <div className="nexus-section-eyebrow mb-2">
+                {activeTier ? "Account Upgrade" : "Security Protocol 03"}
               </div>
-              ));
-            })()}
+              <h2 className="text-3xl font-extrabold tracking-tight mb-2">
+                {activeTier ? "Enhance Your Shield" : "Weekly Coverage Plans"}
+              </h2>
+              <p className="text-muted-foreground text-sm">
+                Pricing is dynamically adjusted based on risk metrics.
+                Current modifiers: {weather?.impact === "Severe" || weather?.value?.toLowerCase().includes("rain") ? "High Weather Risk (+15%) " : ""}
+                {aqi?.value && parseInt(aqi.value) > 300 ? "Hazardous AQI (+20%)" : ""}
+              </p>
+            </div>
           </div>
-        </div>
+
+          <div className="grid grid-cols-1 md:grid-cols-3 gap-6 relative overflow-visible">
+            {isProcessing && (
+              <div className="absolute inset-0 z-50 bg-background/40 backdrop-blur-md flex items-center justify-center rounded-[2.5rem]">
+                <div className="flex flex-col items-center gap-4">
+                  <Loader2 size={32} className="text-primary animate-spin" />
+                  <p className="text-xs font-bold tracking-widest text-primary uppercase animate-pulse">Initializing Gateway...</p>
+                </div>
+              </div>
+            )}
+
+            {PLAN_DISPLAY.map((plan, i) => {
+              const config = PREMIUM_PLANS[plan.id];
+              const isCurrentPlan = activeTier === plan.id;
+              const isUpgradable = upgradableTiers.includes(plan.id);
+              const isLocked = activeTier !== null && !isUpgradable && !isCurrentPlan;
+              const dynamicPrice = calculateDynamicPrice(config.price, weather, aqi, locationName);
+
+              return (
+                <div
+                  key={plan.id}
+                  className="relative group h-full"
+                >
+                  <button
+                    onClick={() => isUpgradable && handleSelectPlan(plan.id)}
+                    disabled={isProcessing || !isUpgradable}
+                    className={cn(
+                      "w-full h-full text-left rounded-[2.5rem] p-6 transition-all duration-300 relative flex flex-col items-stretch",
+                      isCurrentPlan
+                        ? "nexus-glow-card border-emerald-500/40 shadow-emerald-500/10 bg-emerald-500/5"
+                        : isLocked
+                        ? "border-border/20 bg-card/20 opacity-40 cursor-not-allowed grayscale"
+                        : plan.recommended
+                        ? "nexus-glow-card border-primary/50 shadow-primary/20 scale-[1.02] z-10"
+                        : "nexus-glass-card hover:border-primary/40 hover:translate-y-[-4px]"
+                    )}
+                  >
+                    {/* Status Badges */}
+                    <div className="absolute top-6 right-6 flex flex-col items-end gap-2">
+                      {isCurrentPlan && (
+                        <div className="bg-emerald-500 text-white text-[9px] font-black px-3 py-1 rounded-full uppercase tracking-widest flex items-center gap-1.5">
+                          <CheckCircle size={10} /> ACTIVE SHIELD
+                        </div>
+                      )}
+                      {isLocked && (
+                        <div className="bg-secondary/80 text-muted-foreground text-[9px] font-black px-3 py-1 rounded-full uppercase tracking-widest flex items-center gap-1.5">
+                          <Lock size={9} /> MULTIPLIER SECURED
+                        </div>
+                      )}
+                    </div>
+
+                    <div className="flex items-center gap-4 mb-6">
+                      <div className={cn("w-12 h-12 rounded-2xl flex items-center justify-center border-2 shadow-inner", plan.bg)}>
+                        <span className={plan.accent}>{plan.icon}</span>
+                      </div>
+                      <div>
+                        <h3 className="text-xl font-black tracking-tight">{plan.id.toUpperCase()}</h3>
+                        <div className="flex items-baseline gap-1.5">
+                          <span className="text-2xl font-black text-foreground tabular-nums tracking-tighter">₹{dynamicPrice}</span>
+                          {dynamicPrice > config.price && (
+                            <span className="text-xs text-muted-foreground line-through">₹{config.price}</span>
+                          )}
+                          <span className="text-[10px] text-muted-foreground font-bold uppercase tracking-widest">/ week</span>
+                        </div>
+                      </div>
+                    </div>
+
+                    <div className="flex-grow">
+                      <ul className="space-y-3 mb-6">
+                        {plan.features.map((feat, j) => (
+                          <li key={j} className="flex items-start gap-3 text-xs font-semibold opacity-90 leading-tight">
+                            <div className={cn("mt-0.5 shrink-0", isCurrentPlan ? "text-emerald-500" : "text-primary")}>
+                              <CheckCircle size={14} />
+                            </div>
+                            <span>{feat}</span>
+                          </li>
+                        ))}
+                      </ul>
+                    </div>
+
+                    <div className="pt-4 border-t border-border/10">
+                      <div 
+                        className={cn(
+                          "w-full rounded-2xl py-3 text-[10px] font-black uppercase tracking-[0.2em] transition-all shadow-lg flex items-center justify-center gap-2",
+                          isCurrentPlan 
+                            ? "bg-emerald-500/10 text-emerald-500 border border-emerald-500/20" 
+                            : isUpgradable 
+                            ? "bg-primary text-primary-foreground hover:bg-primary/90 hover:shadow-primary/30" 
+                            : "bg-secondary text-muted-foreground border border-border/10"
+                        )}
+                      >
+                        {isCurrentPlan ? (
+                          <>SHIELD ENGAGED</>
+                        ) : isUpgradable ? (
+                          <>{activeTier ? "EXECUTE UPGRADE" : `ACTIVATE ${plan.id.toUpperCase()}`} <Zap size={12} className="fill-current" /></>
+                        ) : (
+                          <>UNAVAILABLE</>
+                        )}
+                      </div>
+                    </div>
+                  </button>
+                </div>
+              );
+            })}
+          </div>
+        </section>
       </main>
-
-      {/* Upgrade Modal & Payment Flow */}
-      {showUpgradeModal && (
-        <div className="fixed inset-0 z-50 flex items-end sm:items-center justify-center bg-black/60 backdrop-blur-sm p-4 animate-in fade-in duration-200">
-          <motion.div
-            initial={{ opacity: 0, y: 100 }}
-            animate={{ opacity: 1, y: 0 }}
-            className="w-full max-w-sm bg-card border border-border/50 rounded-3xl overflow-hidden shadow-2xl relative"
-          >
-            <button
-              onClick={() => setShowUpgradeModal(false)}
-              className="absolute top-4 right-4 p-2 bg-secondary rounded-full text-muted-foreground hover:text-foreground z-10"
-              disabled={isProcessing}
-            >
-              <X size={16} />
-            </button>
-
-            {upgradeStep === 1 && (
-              <div className="p-6">
-                <div className="w-12 h-12 bg-indigo-500/20 rounded-2xl flex items-center justify-center mb-4 border border-indigo-500/30">
-                  <Shield className="w-6 h-6 text-indigo-400" />
-                </div>
-                <h2 className="text-xl font-bold mb-2">Premium Shield Upgrade</h2>
-                <p className="text-sm text-muted-foreground mb-6">
-                  Enhance your hourly coverage by paying a one-time upgrade fee. Get maximum protection against unforeseen disruptions.
-                </p>
-
-                <div className="bg-secondary/50 rounded-2xl p-4 space-y-3 mb-6">
-                  <div className="flex justify-between items-center">
-                    <span className="text-sm">Additional Cost</span>
-                    <span className="font-bold">₹15.00</span>
-                  </div>
-                  <div className="flex justify-between items-center text-emerald-500">
-                    <span className="text-sm font-bold">New Max Coverage</span>
-                    <span className="font-bold">+₹500.00</span>
-                  </div>
-                </div>
-
-                <button
-                  onClick={() => setUpgradeStep(2)}
-                  className="w-full bg-primary text-background font-bold py-3.5 rounded-xl hover:bg-primary/90 transition-colors"
-                >
-                  Continue to Payment
-                </button>
-              </div>
-            )}
-
-            {upgradeStep === 2 && (
-              <div className="p-6">
-                <h2 className="text-xl font-bold mb-4">Select Payment Method</h2>
-                
-                <div className="space-y-3 mb-6">
-                  <button 
-                    onClick={() => setPaymentMethod("wallet")}
-                    className={cn(
-                      "w-full flex items-center gap-3 p-4 rounded-2xl border transition-colors text-left",
-                      paymentMethod === "wallet" ? "border-primary bg-primary/10" : "border-border/50 bg-secondary/50"
-                    )}
-                  >
-                    <WalletIcon className="text-primary" size={20} />
-                    <div>
-                      <div className="font-bold text-sm">Nexus Wallet</div>
-                      <div className="text-xs text-muted-foreground">Balance: ₹1,240.00</div>
-                    </div>
-                  </button>
-                  <button 
-                    onClick={() => setPaymentMethod("upi")}
-                    className={cn(
-                      "w-full flex items-center gap-3 p-4 rounded-2xl border transition-colors text-left",
-                      paymentMethod === "upi" ? "border-primary bg-primary/10" : "border-border/50 bg-secondary/50"
-                    )}
-                  >
-                    <Smartphone className="text-emerald-500" size={20} />
-                    <div>
-                      <div className="font-bold text-sm">UPI</div>
-                      <div className="text-xs text-muted-foreground">GPay, PhonePe, Paytm</div>
-                    </div>
-                  </button>
-                  <button 
-                    onClick={() => setPaymentMethod("netbanking")}
-                    className={cn(
-                      "w-full flex items-center gap-3 p-4 rounded-2xl border transition-colors text-left",
-                      paymentMethod === "netbanking" ? "border-primary bg-primary/10" : "border-border/50 bg-secondary/50"
-                    )}
-                  >
-                    <CreditCard className="text-indigo-500" size={20} />
-                    <div>
-                      <div className="font-bold text-sm">Netbanking</div>
-                      <div className="text-xs text-muted-foreground">All major banks</div>
-                    </div>
-                  </button>
-                </div>
-
-                <button
-                  onClick={handleRazorpayPayment}
-                  disabled={!paymentMethod || isProcessing}
-                  className="w-full bg-primary text-background font-bold py-3.5 rounded-xl hover:bg-primary/90 transition-colors flex items-center justify-center gap-2 disabled:opacity-50"
-                >
-                  {isProcessing ? <Loader2 className="animate-spin" size={18} /> : "Pay ₹15.00"}
-                </button>
-              </div>
-            )}
-
-            {upgradeStep === 3 && (
-              <div className="p-6 flex flex-col items-center text-center py-10">
-                <motion.div
-                  initial={{ scale: 0 }}
-                  animate={{ scale: 1 }}
-                  transition={{ type: "spring", bounce: 0.5 }}
-                >
-                  <CheckCircle className="w-16 h-16 text-emerald-500 mb-4" />
-                </motion.div>
-                <h2 className="text-xl font-bold mb-2">Upgrade Successful!</h2>
-                <p className="text-sm text-muted-foreground mb-8">
-                  Your coverage has been actively extended. Your new cap is ₹{displayCoverage}.
-                </p>
-                <button
-                  onClick={() => {
-                    refreshPlanState();
-                    setShowUpgradeModal(false);
-                  }}
-                  className="w-full bg-secondary text-foreground font-bold py-3.5 rounded-xl hover:bg-secondary/80 transition-colors"
-                >
-                  Return to Dashboard
-                </button>
-              </div>
-            )}
-          </motion.div>
-        </div>
-      )}
     </div>
   );
 }

@@ -3,6 +3,7 @@ import { ArrowLeft, Bell, CheckCircle2 } from "lucide-react";
 import { useNavigate } from "react-router-dom";
 import { cn } from "../lib/utils";
 import { useState } from "react";
+import AuthShell from "../components/AuthShell";
 
 const PLATFORMS = [
   {
@@ -39,64 +40,32 @@ export default function PlatformSelect() {
   const [selected, setSelected] = useState("blinkit");
 
   return (
-    <div className="min-h-screen bg-background flex flex-col">
-      <header className="flex items-center justify-between p-4 border-b border-border/10">
-        <div className="flex items-center gap-3">
-          <button onClick={() => navigate(-1)} className="p-2 -ml-2 hover:bg-secondary rounded-full">
-            <ArrowLeft size={20} />
-          </button>
-          <div className="flex items-center gap-2">
-            <div className="w-6 h-6 bg-primary/20 rounded-md flex items-center justify-center">
-              <span className="text-primary text-xs font-bold">N</span>
-            </div>
-            <span className="font-bold tracking-tight">Nexus Sovereign</span>
-          </div>
-        </div>
-        <button className="p-2 hover:bg-secondary rounded-full relative">
-          <Bell size={20} />
-          <span className="absolute top-2 right-2 w-2 h-2 bg-primary rounded-full" />
-        </button>
-      </header>
-
-      <main className="flex-1 p-6 flex flex-col">
-        <div className="flex justify-center gap-2 mb-8">
-          <div className="h-1 w-8 bg-primary rounded-full" />
-          <div className="h-1 w-2 bg-secondary rounded-full" />
-          <div className="h-1 w-2 bg-secondary rounded-full" />
-        </div>
-
-        <motion.div
-          initial={{ opacity: 0, y: 20 }}
-          animate={{ opacity: 1, y: 0 }}
-          className="text-center mb-10"
-        >
-          <h1 className="text-3xl font-bold tracking-tight mb-3">
-            Which platform do you deliver for?
-          </h1>
-          <p className="text-muted-foreground">
-            We'll calibrate your coverage to your specific earning patterns.
-          </p>
-        </motion.div>
-
-        <div className="space-y-4 flex-1">
+    <AuthShell
+      title="Which platform do you deliver for?"
+      subtitle="We'll calibrate your coverage to your specific earning patterns."
+      onBack={() => navigate(-1)}
+      step="Step 1 of 3"
+      progress={0.33}
+    >
+      <div className="space-y-4">
           {PLATFORMS.map((p) => (
             <button
               key={p.id}
               onClick={() => setSelected(p.id)}
               className={cn(
-                "w-full flex items-center p-4 rounded-2xl border transition-all text-left relative overflow-hidden",
+                "w-full flex items-center p-5 rounded-[1.45rem] border transition-all text-left relative overflow-hidden",
                 selected === p.id
-                  ? "border-primary bg-primary/5 shadow-[0_0_20px_rgba(245,166,35,0.1)]"
-                  : "border-border/50 bg-card hover:border-border"
+                  ? "border-primary/30 bg-primary/8 shadow-[0_20px_40px_rgba(245,166,35,0.10)]"
+                  : "border-border/50 bg-background/45 hover:border-primary/20 hover:bg-card/70"
               )}
             >
-              <div className="w-12 h-12 rounded-xl bg-secondary flex items-center justify-center text-2xl mr-4 shrink-0">
+              <div className="mr-4 flex h-13 w-13 shrink-0 items-center justify-center rounded-2xl bg-secondary/70 text-2xl">
                 {p.icon}
               </div>
               <div className="flex-1">
                 <div className="flex items-center justify-between mb-1">
                   <h3 className="font-bold text-lg">{p.name}</h3>
-                  <span className={cn("text-[10px] font-bold px-2 py-1 rounded-md uppercase tracking-wider", p.riskBg, p.riskColor)}>
+                  <span className={cn("text-[10px] font-bold px-2.5 py-1 rounded-full uppercase tracking-[0.16em]", p.riskBg, p.riskColor)}>
                     {p.risk}
                   </span>
                 </div>
@@ -110,25 +79,24 @@ export default function PlatformSelect() {
             </button>
           ))}
 
-          <div className="mt-6 p-4 rounded-2xl bg-emerald-500/5 border border-emerald-500/20 flex gap-3">
+          <div className="mt-6 flex gap-3 rounded-[1.35rem] border border-emerald-500/20 bg-emerald-500/6 p-4">
             <CheckCircle2 className="text-emerald-500 shrink-0 mt-0.5" size={18} />
             <p className="text-xs text-muted-foreground leading-relaxed">
               <strong className="text-emerald-500 font-semibold">Smart Calibration:</strong> Nexus analyzed 1.2M trips this month to ensure your premium reflects current road conditions.
             </p>
           </div>
-        </div>
+      </div>
 
-        <button
+      <button
           onClick={() => {
             localStorage.setItem("signin_platform", selected);
             navigate("/verify");
           }}
-          className="w-full bg-primary text-primary-foreground font-semibold py-4 rounded-xl mt-8 hover:bg-primary/90 transition-colors shadow-lg shadow-primary/25 flex items-center justify-center gap-2"
+          className="nexus-button-primary mt-8 w-full"
         >
           Continue
           <ArrowLeft size={18} className="rotate-180" />
-        </button>
-      </main>
-    </div>
+      </button>
+    </AuthShell>
   );
 }

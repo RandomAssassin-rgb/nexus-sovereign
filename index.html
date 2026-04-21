@@ -3,11 +3,51 @@
   <head>
     <meta charset="UTF-8" />
     <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+    <meta name="theme-color" content="#d19a2f" />
+    <meta name="apple-mobile-web-app-capable" content="yes" />
+    <meta name="apple-mobile-web-app-status-bar-style" content="black-translucent" />
+    <link rel="preconnect" href="https://fonts.googleapis.com" />
+    <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin />
+    <link href="https://fonts.googleapis.com/css2?family=Sora:wght@400;500;600;700;800&family=Fraunces:opsz,wght@9..144,700;9..144,800&display=swap" rel="stylesheet" />
+    <link rel="manifest" href="/manifest.webmanifest" />
     <title>Nexus Sovereign</title>
   </head>
   <body>
     <div id="root"></div>
     <script src="https://checkout.razorpay.com/v1/checkout.js"></script>
+    <script>
+      (function () {
+        try {
+          var host = window.location.hostname;
+          var isLocal =
+            host === "localhost" ||
+            host === "127.0.0.1" ||
+            host === "::1" ||
+            host === "[::1]" ||
+            window.location.protocol === "http:";
+
+          if (!isLocal || !("serviceWorker" in navigator)) {
+            return;
+          }
+
+          navigator.serviceWorker.getRegistrations().then(function (registrations) {
+            registrations.forEach(function (registration) {
+              registration.unregister().catch(function () {});
+            });
+          });
+
+          if ("caches" in window) {
+            caches.keys().then(function (keys) {
+              keys.forEach(function (key) {
+                caches.delete(key).catch(function () {});
+              });
+            });
+          }
+        } catch (error) {
+          console.warn("[PWA] Early local cleanup failed:", error);
+        }
+      })();
+    </script>
     <script type="module" src="/src/main.tsx"></script>
   </body>
 </html>

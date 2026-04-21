@@ -1,5 +1,5 @@
 import { useState, useEffect } from "react";
-import axios from "axios";
+import { apiClient } from "../lib/apiClient";
 import { motion } from "framer-motion";
 import { Brain, Sparkles } from "lucide-react";
 
@@ -20,7 +20,7 @@ export default function RiskAnalysis({ weatherData, aqiData, trafficData, locati
     const analyzeRisk = async () => {
       setLoading(true);
       try {
-        const response = await axios.post("/api/ai/risk-insights", {
+        const response = await apiClient.post("/api/ai/risk-insights", {
           weatherData,
           aqiData,
           trafficData,

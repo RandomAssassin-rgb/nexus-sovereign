@@ -1,16 +1,30 @@
 import { motion } from "framer-motion";
 import { ArrowLeft, Link2, KeyRound, CheckCircle2 } from "lucide-react";
 import { useNavigate } from "react-router-dom";
-import { useState, useEffect } from "react";
+import { useState, useEffect, useCallback } from "react";
 import { cn } from "../lib/utils";
 import { clearUserSession } from "../lib/payoutStore";
+import AuthShell from "../components/AuthShell";
+import { clearSessionBridge, persistSessionBridge } from "../lib/sessionBridge";
+import { apiClient } from "../lib/apiClient";
+import { loadBiometricModels } from "../lib/biometricService";
 
 export default function SignInMethod() {
   const navigate = useNavigate();
   const [platform, setPlatform] = useState("");
   const [isConnecting, setIsConnecting] = useState(false);
 
+  const resolveFaceDescriptor = useCallback(async (partnerId: string) => {
+    try {
+      const response = await apiClient.get(`/api/auth/profile/${encodeURIComponent(partnerId)}`);
+      return response.data?.user?.face_descriptor ?? null;
+    } catch {
+      return null;
+    }
+  }, []);
+
   useEffect(() => {
+    void loadBiometricModels();
     const saved = localStorage.getItem("signin_platform");
     if (saved) setPlatform(saved);
     
@@ -30,31 +44,46 @@ export default function SignInMethod() {
         setIsConnecting(true);
         
         try {
-            await fetch("/api/auth/register-user", {
-                method: "POST",
-                headers: { "Content-Type": "application/json" },
-                body: JSON.stringify({
-                    platform: localStorage.getItem("signin_platform") || "swiggy_zomato",
-                    method: "oauth",
-                    partnerId,
-                    biometric_verified: true
-                })
+            await apiClient.post("/api/auth/register-user", {
+              platform: localStorage.getItem("signin_platform") || "swiggy_zomato",
+              method: "oauth",
+              partnerId,
             });
 
-            clearUserSession(); // ← wipe previous user's data FIRST
+            clearUserSession();
+            await clearSessionBridge().catch(() => undefined);
             localStorage.setItem("signin_method", "oauth");
             localStorage.setItem("partner_id", partnerId);
-            localStorage.setItem("dummy_session", JSON.stringify({
+            const session = JSON.stringify({
                 user: { id: partnerId, verified: true },
                 expiry: new Date(Date.now() + 86400000).toISOString()
-            }));
+            });
+            localStorage.setItem("nexus_session", session);
+            await persistSessionBridge({
+              partner_id: partnerId,
+              nexus_session: session,
+              signin_platform: localStorage.getItem("signin_platform"),
+            }).catch(() => undefined);
             window.dispatchEvent(new Event("auth-change"));
-            navigate("/biometrics");
+            const faceDescriptor = await resolveFaceDescriptor(partnerId);
+            navigate("/biometrics", {
+              state: faceDescriptor
+                ? {
+                    partnerId,
+                    faceDescriptor,
+                    hasFaceDescriptor: true,
+                  }
+                : {
+                    isSignup: true,
+                    recoveryMode: true,
+                    partnerId,
+                  },
+            });
         } catch (error) {
             console.error("OAuth sync failed", error);
-            clearUserSession(); // fallback: still clear old session
+            clearUserSession();
             localStorage.setItem("partner_id", partnerId);
-            navigate("/biometrics");
+            navigate("/biometrics", { state: { isSignup: true, recoveryMode: true, partnerId } });
         } finally {
             setIsConnecting(false);
         }
@@ -62,28 +91,13 @@ export default function SignInMethod() {
     };
     window.addEventListener('message', handleMessage);
     return () => window.removeEventListener('message', handleMessage);
-  }, [navigate]);
+  }, [navigate, resolveFaceDescriptor]);
 
   const handleConnect = (specificPlatform: string) => {
     setIsConnecting(true);
     localStorage.setItem("specific_platform", specificPlatform);
-    
-    // Mock OAuth popup
-    const width = 500;
-    const height = 650;
-    const left = (window.innerWidth - width) / 2;
-    const top = (window.innerHeight - height) / 2;
-    
-    const authWindow = window.open(
-        '/mock-oauth', 
-        'oauth_popup', 
-        `width=${width},height=${height},top=${top},left=${left},scrollbars=no,resizable=no`
-    );
 
-    if (!authWindow) {
-        alert('Please allow popups for this site.');
-        setIsConnecting(false);
-    }
+    navigate("/mock-oauth?next=/biometrics&flow=signin");
   };
 
   const getPlatformLabel = (id: string) => {
@@ -96,40 +110,23 @@ export default function SignInMethod() {
   const platformsToShow = getPlatformLabel(platform);
 
   return (
-    <div className="min-h-screen bg-background flex flex-col">
-      <header className="flex items-center p-4 border-b border-border/10">
-        <button onClick={() => navigate(-1)} className="p-2 -ml-2 hover:bg-secondary rounded-full">
-          <ArrowLeft size={20} />
-        </button>
-        <span className="ml-2 font-bold tracking-tight">Nexus Sovereign</span>
-      </header>
-
-      <main className="flex-1 p-6 flex flex-col">
-        <div className="flex justify-center gap-2 mb-8">
-          <div className="h-1 w-2 bg-secondary rounded-full" />
-          <div className="h-1 w-8 bg-primary rounded-full" />
-          <div className="h-1 w-2 bg-secondary rounded-full" />
-        </div>
-
-        <motion.div
-            initial={{ opacity: 0, y: 20 }}
-            animate={{ opacity: 1, y: 0 }}
-            className="text-center mb-10"
-        >
-            <h1 className="text-3xl font-bold tracking-tight mb-3">How do you want to sign in?</h1>
-            <p className="text-muted-foreground">Authenticate your account to sync coverage.</p>
-        </motion.div>
-
-        <div className="space-y-4">
+    <AuthShell
+      title="How do you want to sign in?"
+      subtitle="Authenticate your account and restore policy, claims, and payout context."
+      onBack={() => navigate(-1)}
+      step="Sign in"
+      progress={0.66}
+    >
+      <div className="space-y-4">
             <div className="grid grid-cols-1 gap-4">
                 {platformsToShow.map((p) => (
                     <button
                         key={p}
                         onClick={() => handleConnect(p)}
                         disabled={isConnecting}
-                        className="w-full p-6 flex items-center gap-4 rounded-3xl border border-primary/20 bg-primary/5 hover:bg-primary/10 transition-all group"
+                        className="group w-full rounded-[1.6rem] border border-primary/18 bg-primary/8 p-6 text-left transition-all hover:bg-primary/12"
                     >
-                        <div className="w-12 h-12 rounded-xl bg-primary/20 flex items-center justify-center text-primary group-hover:scale-110 transition-transform shrink-0">
+                        <div className="flex w-12 h-12 rounded-2xl bg-primary/20 items-center justify-center text-primary group-hover:scale-110 transition-transform shrink-0">
                             {isConnecting ? (
                                 <div className="w-6 h-6 border-2 border-primary border-t-transparent rounded-full animate-spin" />
                             ) : (
@@ -155,7 +152,7 @@ export default function SignInMethod() {
                     localStorage.setItem("signin_method", "partner_id");
                     navigate("/signin-credentials");
                 }}
-                className="w-full p-6 flex items-center gap-4 rounded-3xl border border-border/50 bg-card hover:border-border transition-all"
+                className="w-full p-6 flex items-center gap-4 rounded-[1.6rem] border border-border/50 bg-background/45 hover:border-primary/20 hover:bg-card/70 transition-all"
             >
                 <div className="w-12 h-12 rounded-xl bg-secondary flex items-center justify-center text-muted-foreground">
                     <KeyRound size={24} />
@@ -173,7 +170,6 @@ export default function SignInMethod() {
                 Connect Account uses encrypted OAuth protocols. Nexus Sovereign never sees your platform password.
             </p>
         </div>
-      </main>
-    </div>
+    </AuthShell>
   );
 }

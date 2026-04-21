@@ -2,6 +2,8 @@ import { motion } from "framer-motion";
 import { ArrowLeft, Bell, Phone, CheckCircle2 } from "lucide-react";
 import { useNavigate } from "react-router-dom";
 import { useState } from "react";
+import AuthShell from "../components/AuthShell";
+import { persistSessionBridge } from "../lib/sessionBridge";
 
 export default function SignInPhone() {
   const navigate = useNavigate();
@@ -10,51 +12,36 @@ export default function SignInPhone() {
   const validatePhone = (num: string) => /^[6-9]\d{9}$/.test(num);
   const isValid = validatePhone(phoneNumber);
 
-  const handleSendOTP = () => {
+  const handleSendOTP = async () => {
     if (isValid) {
       // Mock OTP Send for demo
       localStorage.setItem("signin_phone", phoneNumber);
+      await persistSessionBridge({ signin_phone: phoneNumber }).catch(() => undefined);
       navigate("/otp");
     }
   };
 
   return (
-    <div className="min-h-screen bg-background flex flex-col">
-      <header className="flex items-center justify-between p-4 border-b border-border/10">
-        <button onClick={() => navigate(-1)} className="p-2 -ml-2 hover:bg-secondary rounded-full">
-          <ArrowLeft size={20} />
-        </button>
-        <div className="flex items-center gap-2">
-            <div className="w-6 h-6 bg-primary/20 rounded-md flex items-center justify-center">
-              <span className="text-primary text-xs font-bold">N</span>
+    <AuthShell
+      title="Linked mobile"
+      subtitle="Enter the number shared with your partner platform for 2FA."
+      onBack={() => navigate(-1)}
+      step="Identity verification"
+      progress={1}
+      brandLabel="Identity Verification"
+      rightSlot={<div className="nexus-icon-button text-muted-foreground"><Bell size={18} /></div>}
+    >
+      <div className="space-y-6">
+          <motion.div
+            initial={{ opacity: 0, y: 20 }}
+            animate={{ opacity: 1, y: 0 }}
+            className="mb-2 text-center"
+          >
+            <div className="mx-auto mb-5 flex h-16 w-16 items-center justify-center rounded-[1.6rem] bg-primary/10">
+              <Phone className="h-8 w-8 text-primary" />
             </div>
-            <span className="font-bold tracking-tight">Identity Verification</span>
-          </div>
-        <button className="p-2 hover:bg-secondary rounded-full relative">
-          <Bell size={20} />
-        </button>
-      </header>
+          </motion.div>
 
-      <main className="flex-1 p-6 flex flex-col">
-        <div className="flex justify-center gap-2 mb-8">
-          <div className="h-1 w-2 bg-secondary rounded-full" />
-          <div className="h-1 w-2 bg-secondary rounded-full" />
-          <div className="h-1 w-8 bg-primary rounded-full" />
-        </div>
-
-        <motion.div
-          initial={{ opacity: 0, y: 20 }}
-          animate={{ opacity: 1, y: 0 }}
-          className="text-center mb-10"
-        >
-          <div className="w-16 h-16 bg-primary/10 rounded-2xl flex items-center justify-center mx-auto mb-6">
-            <Phone className="w-8 h-8 text-primary" />
-          </div>
-          <h1 className="text-3xl font-bold tracking-tight mb-3">Linked Mobile</h1>
-          <p className="text-muted-foreground">Enter the number shared with your partner platform for 2FA.</p>
-        </motion.div>
-
-        <div className="space-y-6 flex-1">
           <div className="relative">
             <div className="absolute left-4 top-1/2 -translate-y-1/2 flex items-center gap-2">
               <span className="text-lg font-bold text-muted-foreground">+91</span>
@@ -65,7 +52,7 @@ export default function SignInPhone() {
               value={phoneNumber}
               onChange={(e) => setPhoneNumber(e.target.value.replace(/\D/g, '').slice(0, 10))}
               placeholder="98765 43210"
-              className="w-full bg-card border border-border/50 rounded-xl p-4 pl-20 text-lg font-bold tracking-widest focus:outline-none focus:border-primary focus:ring-1 focus:ring-primary transition-all"
+              className="nexus-input pl-20 text-lg font-bold tracking-widest"
             />
             {phoneNumber.length > 0 && !isValid && (
               <p className="text-xs text-red-500 mt-2 ml-4 font-mono">
@@ -80,16 +67,15 @@ export default function SignInPhone() {
               We'll send a 6-digit OTP to verify your identity. standard rates apply.
             </p>
           </div>
-        </div>
+      </div>
 
-        <button
+      <button
           onClick={handleSendOTP}
           disabled={!isValid}
-          className="w-full bg-primary text-primary-foreground font-semibold py-4 rounded-xl mt-8 hover:bg-primary/90 transition-colors shadow-lg shadow-primary/25 disabled:opacity-50 disabled:cursor-not-allowed"
+          className="nexus-button-primary mt-8 w-full disabled:opacity-50 disabled:cursor-not-allowed"
         >
           Send OTP
-        </button>
-      </main>
-    </div>
+      </button>
+    </AuthShell>
   );
 }

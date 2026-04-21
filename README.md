@@ -1,5 +1,3 @@
-
-
 # Nexus Sovereign
 
 AI-driven parametric protection infrastructure for gig and delivery workers.
@@ -714,4 +712,3 @@ https://nexus-sovereign.onrender.com
 ---
 
 If you are using this project for judging, review, or collaboration and want a guided walkthrough, start with the worker onboarding flow, then test coverage activation, zero-touch payout simulation, claims review, and the admin dashboard.
-

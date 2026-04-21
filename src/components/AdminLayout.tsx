@@ -1,6 +1,8 @@
 import React from 'react';
 import { useNavigate, useLocation, Outlet } from 'react-router-dom';
+import SystemIntegrityStatus from './SystemIntegrityStatus';
 import {
+  Building2,
   LayoutDashboard,
   Send,
   AlertTriangle,
@@ -26,6 +28,7 @@ const NAV_ITEMS = [
   { path: '/admin/payouts', label: 'Payouts', icon: Send },
   { path: '/admin/triggers', label: 'Triggers', icon: AlertTriangle, hoverIcon: 'group-hover:text-amber-500' },
   { path: '/admin/risk', label: 'Risk & Fraud', icon: Shield },
+  { path: '/admin/partners', label: 'Partners', icon: Building2 },
   { path: '/admin/riders', label: 'Riders', icon: Users },
 ];
 
@@ -41,19 +44,27 @@ export default function AdminLayout({ children, onSimulateClick, pageTitle }: Ad
   };
 
   return (
-    <div className="min-h-screen bg-background text-foreground font-sans flex">
+    <div className="nexus-app-stage min-h-screen bg-background text-foreground font-sans">
+      <div className="pointer-events-none absolute inset-0 z-0">
+        <div className="absolute left-[6%] top-[8%] h-72 w-72 rounded-full bg-primary/10 blur-[140px]" />
+        <div className="absolute bottom-[8%] right-[8%] h-80 w-80 rounded-full bg-primary/8 blur-[150px]" />
+      </div>
+      <div className="nexus-app-content flex min-h-screen">
       {/* Sidebar */}
-      <aside className="w-64 bg-card border-r border-border/50 flex flex-col fixed h-full z-10 shadow-[4px_0_24px_rgba(0,0,0,0.02)]">
-        <div className="p-6">
+      <aside className="fixed z-20 flex h-full w-72 flex-col border-r border-border/40 bg-card/75 backdrop-blur-xl shadow-[18px_0_50px_rgba(15,12,9,0.08)] dark:bg-black/45">
+        <div className="border-b border-border/40 p-6">
           <h1
-            className="text-2xl font-black text-primary tracking-tight cursor-pointer"
+            className="cursor-pointer text-2xl font-black tracking-tight text-primary"
             onClick={() => navigate('/admin/dashboard')}
           >
             NEXUS<span className="text-foreground font-medium">ADMIN</span>
           </h1>
+          <p className="mt-2 text-sm leading-6 text-muted-foreground">
+            Premium command layer for triggers, claims, risk posture, and reserve discipline.
+          </p>
         </div>
 
-        <nav className="flex-1 px-4 py-4 space-y-1">
+        <nav className="flex-1 space-y-2 px-4 py-5">
           {NAV_ITEMS.map((item) => {
             const active = isActive(item.path);
             const Icon = item.icon;
@@ -61,10 +72,10 @@ export default function AdminLayout({ children, onSimulateClick, pageTitle }: Ad
               <button
                 key={item.path}
                 onClick={() => navigate(item.path)}
-                className={`flex items-center gap-3 w-full px-4 py-3 rounded-xl font-medium transition-all group ${
+                className={`group flex w-full items-center gap-3 rounded-2xl px-4 py-3.5 font-medium transition-all ${
                   active
-                    ? 'bg-primary/10 text-primary font-semibold border-l-4 border-primary'
-                    : 'text-muted-foreground hover:text-foreground hover:bg-secondary border-l-4 border-transparent'
+                    ? 'border border-primary/25 bg-primary/10 text-primary shadow-[0_16px_34px_rgba(245,166,35,0.10)]'
+                    : 'border border-transparent text-muted-foreground hover:border-border/50 hover:bg-secondary/65 hover:text-foreground'
                 }`}
               >
                 <Icon
@@ -83,39 +94,40 @@ export default function AdminLayout({ children, onSimulateClick, pageTitle }: Ad
           })}
         </nav>
 
-        <div className="p-4 border-t border-border/50">
-          <button className="flex items-center gap-3 w-full px-4 py-2 text-muted-foreground hover:text-foreground rounded-lg font-medium transition-colors">
+        <div className="border-t border-border/40 p-4">
+          <button className="flex w-full items-center gap-3 rounded-xl border border-border/40 bg-background/40 px-4 py-3 text-muted-foreground transition-colors hover:bg-secondary/60 hover:text-foreground">
             <Settings size={18} /> Settings
           </button>
         </div>
       </aside>
 
       {/* Main Content Area */}
-      <main className="flex-1 ml-64 flex flex-col min-h-screen">
+      <main className="ml-72 flex min-h-screen flex-1 flex-col">
         {/* Header */}
-        <header className="sticky top-0 z-20 bg-background/80 backdrop-blur-xl border-b border-border/10 px-8 py-4 flex items-center justify-between shadow-sm">
+        <header className="sticky top-0 z-20 flex items-center justify-between gap-6 border-b border-border/30 bg-background/76 px-8 py-5 backdrop-blur-xl">
           <div className="flex items-center gap-4">
-            <h2 className="text-xl font-bold flex items-center gap-2">
+            <h2 className="flex items-center gap-2 text-xl font-bold">
               Command Overview{' '}
               <ChevronRight className="text-muted-foreground" size={18} />{' '}
               <span className="text-muted-foreground font-medium">
-                {pageTitle || 'Bengaluru Core'}
+                {pageTitle || 'Tambaram Core'}
               </span>
             </h2>
+            <SystemIntegrityStatus />
           </div>
 
           <div className="flex items-center gap-4">
-            <button className="p-2 text-muted-foreground transition-colors hover:text-zinc-900 hover:bg-secondary rounded-full relative">
+            <button className="nexus-icon-button relative text-muted-foreground transition-colors hover:text-foreground">
               <Bell size={20} />
-              <span className="absolute top-1.5 right-1.5 w-2 h-2 bg-primary/100 rounded-full border-2 border-white"></span>
+              <span className="absolute right-2 top-2 h-2 w-2 rounded-full bg-primary"></span>
             </button>
-            <button className="flex items-center gap-2 px-4 py-2 border border-border/50 bg-secondary/50 text-foreground hover:bg-secondary font-semibold rounded-lg shadow-[0_2px_4px_rgba(0,0,0,0.02)] transition-all">
+            <button className="nexus-button-secondary rounded-xl px-4 py-3 text-sm">
               <Download size={16} /> Export Data
             </button>
             {onSimulateClick && (
               <button
                 onClick={onSimulateClick}
-                className="flex items-center gap-2 px-4 py-2 bg-gradient-to-r from-violet-600 to-indigo-600 hover:from-violet-500 hover:to-indigo-500 text-white font-bold rounded-lg shadow-md shadow-indigo-500/20 transform transition-all active:scale-95"
+                className="nexus-button-primary rounded-xl px-5 py-3 text-sm"
               >
                 <Activity size={18} /> Simulate Outage
               </button>
@@ -124,10 +136,11 @@ export default function AdminLayout({ children, onSimulateClick, pageTitle }: Ad
         </header>
 
         {/* Page Content */}
-        <div className="p-8 space-y-8 max-w-7xl mx-auto w-full">
+        <div className="w-full max-w-[118rem] space-y-8 px-8 py-8">
           {children}
         </div>
       </main>
+      </div>
     </div>
   );
 }

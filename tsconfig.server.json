@@ -1,0 +1,26 @@
+{
+  "extends": "./tsconfig.json",
+  "compilerOptions": {
+    "noEmit": false,
+    "outDir": "./dist-server",
+    "module": "NodeNext",
+    "moduleResolution": "NodeNext",
+    "target": "ES2022",
+    "lib": ["ES2022", "DOM", "DOM.Iterable"],
+    "rewriteRelativeImportExtensions": true,
+    "allowImportingTsExtensions": false,
+    "isolatedModules": false,
+    "sourceMap": true,
+    "types": ["node"]
+  },
+  "include": [
+    "server_dev.ts"
+  ],
+  "exclude": [
+    "dist",
+    "android",
+    "legacy_api",
+    "api",
+    "src/**/*.tsx"
+  ]
+}

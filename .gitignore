@@ -1,6 +1,7 @@
 node_modules/
 build/
 dist/
+dist-capacitor/
 coverage/
 .DS_Store
 *.log
@@ -18,3 +19,6 @@ certs/
 credentials_db.json
 final_user_list.json
 tmp_*.json
+*.jks
+*.keystore
+keystore.properties

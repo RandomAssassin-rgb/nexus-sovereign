@@ -13,6 +13,7 @@ export const PREMIUM_PLANS = {
     claimsPerWeek: 2,
     settlementTime: "Under 90 seconds",
     triggerThreshold: "45 minutes",
+    durationDays: 7,
   },
   standard: {
     id: "standard",
@@ -24,6 +25,7 @@ export const PREMIUM_PLANS = {
     claimsPerWeek: 3,
     settlementTime: "Under 90 seconds",
     triggerThreshold: "30 minutes",
+    durationDays: 14,
   },
   pro: {
     id: "pro",
@@ -35,6 +37,7 @@ export const PREMIUM_PLANS = {
     claimsPerWeek: 4,
     settlementTime: "Under 60 seconds",
     triggerThreshold: "20 minutes",
+    durationDays: 30,
   },
 } as const;
 
@@ -69,9 +72,11 @@ export function getActiveStoredTier(): PlanTier | null {
   return tier as PlanTier;
 }
 
-/** Persist plan purchase to localStorage for 7 days. */
+/** Persist plan purchase to localStorage with specific duration or fallback. */
 export function savePlanToLocalStorage(planId: PlanTier, expiresAt?: string) {
-  const until = expiresAt ?? new Date(Date.now() + 7 * 24 * 60 * 60 * 1000).toISOString();
+  const plan = PREMIUM_PLANS[planId];
+  const durationDays = (plan as any).durationDays || 7;
+  const until = expiresAt ?? new Date(Date.now() + durationDays * 24 * 60 * 60 * 1000).toISOString();
   localStorage.setItem("nexus_premium_tier", planId);
   localStorage.setItem("nexus_premium_until", until);
   localStorage.setItem("nexus_premium_upgraded", "true");
@@ -83,6 +88,33 @@ export function rehydratePlanFromServer(serverTier: string | null, serverUntil: 
   const serverActive = new Date(serverUntil) > new Date();
   if (!serverActive) return; // expired on server — don't persist
 
-  // Always trust server as source of truth
+// Always trust server as source of truth
   savePlanToLocalStorage(serverTier as PlanTier, serverUntil);
+}
+
+/**
+ * Dynamically adjusts base standard prices based on environmental risk factors.
+ * This simulates a live actuarial rating engine.
+ */
+export function calculateDynamicPrice(basePrice: number, weather?: any, aqi?: any, zoneName?: string): number {
+  let multiplier = 1.0;
+  
+  // Severe weather increases risk premium
+  if (weather?.impact === "Severe" || weather?.value?.toLowerCase().includes("rain")) {
+    multiplier += 0.15; 
+  }
+  
+  // High AQI increases health/visibility risk
+  if (aqi?.impact === "Hazardous" || (aqi?.value && parseInt(aqi.value) > 300)) {
+    multiplier += 0.20;
+  } else if (aqi?.impact === "Poor" || (aqi?.value && parseInt(aqi.value) > 150)) {
+    multiplier += 0.05;
+  }
+  
+  // Zone-based indexing
+  if (zoneName && zoneName.includes("High Risk")) {
+    multiplier += 0.10;
+  }
+
+  return Math.round(basePrice * multiplier);
 }

@@ -2,16 +2,27 @@
   "version": 2,
   "framework": "vite",
   "rewrites": [
-    { "source": "/api/ml/(.*)", "destination": "/api/ml/main.py" },
-    { "source": "/api/(.*)", "destination": "/api/$1" }
+    { "source": "/api/ml/calculate-premium", "destination": "/api/intelligence/ml/calculate-premium" },
+    { "source": "/api/weather", "destination": "/api/intelligence/weather" },
+    { "source": "/api/aqi", "destination": "/api/intelligence/aqi" },
+    { "source": "/api/traffic", "destination": "/api/intelligence/traffic" },
+    { "source": "/api/verify/(.*)", "destination": "/api/intelligence/verify/$1" },
+    { "source": "/api/ai/(.*)", "destination": "/api/intelligence/ai/$1" },
+    { "source": "/api/actuarial/(.*)", "destination": "/api/finance/actuarial/$1" },
+    { "source": "/api/premium/(.*)", "destination": "/api/finance/premium/$1" },
+    { "source": "/api/razorpay/(.*)", "destination": "/api/finance/razorpay/$1" },
+    { "source": "/api/payments/(.*)", "destination": "/api/finance/payments/$1" },
+    { "source": "/api/wallet/(.*)", "destination": "/api/finance/wallet/$1" },
+    { "source": "/api/cron/(.*)", "destination": "/api/system/cron/$1" },
+    { "source": "/api/ml/(.*)", "destination": "/api/ml/main.py" }
   ],
   "crons": [
     {
-      "path": "/api/cron/auto-trigger",
+      "path": "/api/system/cron/auto-trigger",
       "schedule": "0 0 * * *"
     },
     {
-      "path": "/api/cron/predictive-shield",
+      "path": "/api/system/cron/predictive-shield",
       "schedule": "0 20 * * 0"
     }
   ],

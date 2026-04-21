@@ -3,7 +3,7 @@ import { ArrowLeft, Bell, Wallet, CheckCircle2 } from "lucide-react";
 import { useNavigate } from "react-router-dom";
 import { useState } from "react";
 import { cn } from "../lib/utils";
-import axios from "axios";
+import { apiClient } from "../lib/apiClient";
 
 export default function UPILink() {
   const navigate = useNavigate();
@@ -16,7 +16,7 @@ export default function UPILink() {
       setLoading(true);
       try {
         // Simulate Razorpay UPI Autopay setup
-        const response = await axios.post('/api/razorpay/create-subscription');
+        const response = await apiClient.post('/api/razorpay/create-subscription');
         
         if (response.data && response.data.status === 'created') {
           setIsVerified(true);

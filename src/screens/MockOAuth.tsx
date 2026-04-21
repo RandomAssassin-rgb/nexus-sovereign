@@ -3,6 +3,7 @@ import { ShieldCheck, ArrowRight, Lock } from "lucide-react";
 import { useEffect, useState } from "react";
 import { useNavigate, useSearchParams } from "react-router-dom";
 import { clearUserSession } from "../lib/payoutStore";
+import { clearSessionBridge, persistSessionBridge } from "../lib/sessionBridge";
 
 export default function MockOAuth() {
   const [loading, setLoading] = useState(false);
@@ -15,10 +16,25 @@ export default function MockOAuth() {
     setPlatform(p === "swiggy_zomato" ? "Swiggy / Zomato" : p.charAt(0).toUpperCase() + p.slice(1));
   }, []);
 
+  const buildStablePartnerId = () => {
+    const platformKey =
+      localStorage.getItem("specific_platform") ||
+      localStorage.getItem("signin_platform") ||
+      "worker";
+    const storageKey = `mock_oauth_partner_id:${platformKey}`;
+    const existing = localStorage.getItem(storageKey);
+    if (existing) return existing;
+
+    const nextPartnerId = `MOCK-${platformKey.replace(/[^a-z0-9]/gi, "").slice(0, 6).toUpperCase()}-001`;
+    localStorage.setItem(storageKey, nextPartnerId);
+    return nextPartnerId;
+  };
+
   const handleAuthorize = () => {
     setLoading(true);
     setTimeout(() => {
-      const partnerId = `MOCK-${Math.random().toString(36).substring(7).toUpperCase()}`;
+      const partnerId = buildStablePartnerId();
+      const flow = searchParams.get("flow") || "signup";
 
       // 1. Try popup communication
       if (window.opener && window.opener !== window) {
@@ -30,7 +46,8 @@ export default function MockOAuth() {
         setTimeout(() => window.close(), 100);
       } else {
         // 2. Mobile same-tab fallback
-        clearUserSession(); // ← wipe previous user FIRST
+        clearUserSession();
+        void clearSessionBridge().catch(() => undefined);
         localStorage.setItem("partner_id", partnerId);
         localStorage.setItem("signin_method", "oauth");
         
@@ -38,12 +55,22 @@ export default function MockOAuth() {
             user: { id: partnerId, verified: true },
             expiry: new Date(Date.now() + 86400000).toISOString()
         };
-        localStorage.setItem("dummy_session", JSON.stringify(session));
+        localStorage.setItem("nexus_session", JSON.stringify(session));
+        void persistSessionBridge({
+          partner_id: partnerId,
+          nexus_session: JSON.stringify(session),
+          signin_platform: localStorage.getItem("signin_platform"),
+        }).catch(() => undefined);
         window.dispatchEvent(new Event("auth-change"));
 
         // Redirect based on query param or default to biometrics
         const nextPath = searchParams.get("next") || "/biometrics";
-        navigate(nextPath, { state: { isSignup: true } });
+        navigate(nextPath, {
+          state: {
+            isSignup: flow !== "signin",
+            partnerId,
+          },
+        });
       }
     }, 1500);
   };

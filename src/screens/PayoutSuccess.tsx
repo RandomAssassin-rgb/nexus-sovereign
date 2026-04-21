@@ -1,7 +1,8 @@
 import { motion } from "framer-motion";
 import { ArrowLeft, CheckCircle2, FileText, Download, ShieldCheck, Info, Zap, Share2, Loader2 } from "lucide-react";
 import { useLocation, useNavigate, useParams } from "react-router-dom";
-import { useState, useRef } from "react";
+import { useState, useRef, useEffect } from "react";
+import { apiClient } from "../lib/apiClient";
 import { toPng } from "html-to-image";
 import jsPDF from "jspdf";
 import ViralShareButton from "../components/ViralShareButton";
@@ -13,14 +14,37 @@ export default function PayoutSuccess() {
   const location = useLocation();
   const [showFormula, setShowFormula] = useState(false);
   const [isGeneratingPdf, setIsGeneratingPdf] = useState(false);
+  const [explanationData, setExplanationData] = useState<any>(null);
+  const [loadingExplanation, setLoadingExplanation] = useState(true);
   const reportRef = useRef<HTMLDivElement>(null);
 
-  // Pull from centralized store first, then fallback to route state
+  // Pull from passed state (instant) or decentralized store, then fallback to params
+  const passedClaim = location.state?.claim;
   const storedClaim = id ? getClaimById(id) : null;
-  const claimData = location.state?.claimData || storedClaim?.jepData || null;
-  const amount = location.state?.amount || storedClaim?.amount || 1500;
+  const activeClaim = passedClaim || storedClaim;
+
+  const claimData = activeClaim?.jepData || activeClaim?.summary || null;
+  const amount = activeClaim?.amount || location.state?.amount || 1500;
   const imageUrl = location.state?.imageUrl || null;
-  const claimId = id || storedClaim?.id || `CLM-${Math.floor(1000 + Math.random() * 9000)}`;
+  const claimId = id || activeClaim?.id || `CLM-${Math.floor(1000 + Math.random() * 9000)}`;
+
+  // Personalization
+  const [userName, setUserName] = useState(() => localStorage.getItem("nexus_profile_name") || "Nexus Member");
+
+  useEffect(() => {
+    const fetchExplanation = async () => {
+      // If we have claimData already, we still might want the step-by-step formula from the explainer API
+      try {
+        const { data } = await apiClient.get(`/api/claims/explain/${claimId}`);
+        setExplanationData(data);
+      } catch (err) {
+        console.error("Failed to load payout explanation", err);
+      } finally {
+        setLoadingExplanation(false);
+      }
+    };
+    fetchExplanation();
+  }, [claimId]);
 
   const generatePdfBlob = async (): Promise<{ blob: Blob; filename: string } | null> => {
     if (!reportRef.current) return null;
@@ -127,7 +151,7 @@ export default function PayoutSuccess() {
     <div className="min-h-screen bg-background flex flex-col">
       <header className="flex items-center justify-between p-4 border-b border-border/10 sticky top-0 bg-background/95 backdrop-blur-md z-40">
         <div className="flex items-center gap-3">
-          <button onClick={() => navigate("/home")} className="p-2 -ml-2 hover:bg-secondary rounded-full">
+          <button onClick={() => navigate("/claims")} className="p-2 -ml-2 hover:bg-secondary rounded-full">
             <ArrowLeft size={20} />
           </button>
           <h1 className="font-bold tracking-tight text-xl">Judicial Evidence Packet</h1>
@@ -157,12 +181,12 @@ export default function PayoutSuccess() {
             <CheckCircle2 className="w-10 h-10 text-emerald-500" />
           </div>
           <h2 className="text-3xl font-bold tracking-tight text-emerald-500 mb-1">₹{amount.toLocaleString()}</h2>
-          <p className="text-sm font-medium text-emerald-500/80 mb-2">Payout Processed Successfully</p>
-          <div className="inline-flex items-center gap-1.5 bg-emerald-500/20 text-emerald-600 px-3 py-1 rounded-full text-xs font-bold uppercase tracking-wider mb-4">
-            <Zap size={14} /> Tier 1 (Autonomous)
+          <p className="text-xs font-black text-emerald-500/80 uppercase tracking-widest mb-2">Payout for {userName}</p>
+          <div className="inline-flex items-center gap-1.5 bg-emerald-500/20 text-emerald-600 px-3 py-1 rounded-full text-[10px] font-black uppercase tracking-widest mb-4">
+            <Zap size={14} /> Tier 1 Autonomous Release
           </div>
-          <p className="text-xs text-muted-foreground uppercase tracking-wider font-bold">
-            Claim ID: {claimId}
+          <p className="text-[10px] text-muted-foreground uppercase tracking-widest font-black opacity-60">
+            Nexus Audit Token: <span className="font-mono">{claimId}</span>
           </p>
         </motion.div>
 
@@ -220,11 +244,11 @@ export default function PayoutSuccess() {
                 <div className="pt-4 border-t border-border/50 grid grid-cols-2 gap-4">
                   <div>
                     <h4 className="text-xs font-bold text-muted-foreground uppercase tracking-wider mb-1">Trigger Type</h4>
-                    <p className="text-sm font-medium">{claimData.trigger_type}</p>
+                    <p className="text-sm font-medium">{claimData.trigger_type || activeClaim?.type}</p>
                   </div>
                   <div>
                     <h4 className="text-xs font-bold text-muted-foreground uppercase tracking-wider mb-1">AI Confidence</h4>
-                    <p className="text-sm font-medium text-emerald-500">{claimData.confidence}%</p>
+                    <p className="text-sm font-medium text-emerald-500">{claimData.confidence || activeClaim?.verification_score || "98"}%</p>
                   </div>
                 </div>
               </div>
@@ -250,7 +274,7 @@ export default function PayoutSuccess() {
               onClick={() => setShowFormula(!showFormula)}
               className="w-full flex items-center justify-between text-xs font-bold uppercase tracking-wider text-primary hover:bg-primary/5 p-2 rounded-lg transition-colors"
             >
-              70% Income Replacement Formula
+              Trace Payout Calculation
               <Info size={14} />
             </button>
 
@@ -260,16 +284,47 @@ export default function PayoutSuccess() {
                  animate={{ opacity: 1, height: "auto" }}
                  className="mt-4 pt-4 border-t border-border/50"
                >
-                 <div className="bg-secondary/50 rounded-xl p-4 font-mono text-xs text-muted-foreground">
-                   <p className="mb-2"><span className="text-foreground font-bold">P</span> = Final Payout (₹239)</p>
-                   <p className="mb-2"><span className="text-foreground font-bold">H</span> = Disruption Hours (3.5h)</p>
-                   <p className="mb-2"><span className="text-foreground font-bold">E</span> = Avg. Earnings (₹108/hr)</p>
-                   <p className="mb-2"><span className="text-foreground font-bold">L</span> = Disruption Loss Factor (0.90)</p>
-                   <p className="mb-4"><span className="text-foreground font-bold">S</span> = Sovereign Support (70%)</p>
-                   <div className="bg-background border border-border/50 p-2 rounded-lg text-center font-bold text-primary">
-                     P = (H * E * L) * S = ₹239
+                 {loadingExplanation ? (
+                   <p className="text-xs text-muted-foreground animate-pulse text-center py-4">Tracing parametric logic...</p>
+                 ) : explanationData ? (
+                   <div className="space-y-3">
+                      <div className="bg-secondary/20 p-4 rounded-2xl border border-border/30">
+                        <h4 className="text-[10px] font-black uppercase tracking-widest text-muted-foreground mb-3">Explainable Payout Ledger</h4>
+                        
+                        <div className="space-y-2.5">
+                          <div className="flex justify-between items-center text-xs">
+                            <span className="text-muted-foreground">Trigger Threshold</span>
+                            <span className="font-bold text-primary">{explanationData.trigger}</span>
+                          </div>
+                          
+                          {explanationData.steps.map((step: any, index: number) => (
+                            <div key={index} className="flex justify-between items-center text-xs py-2 border-t border-border/10">
+                              <div className="flex flex-col">
+                                <span className="text-muted-foreground">{step.step}</span>
+                                <span className="text-[9px] opacity-60 max-w-[150px] leading-tight mt-0.5">{step.detail}</span>
+                              </div>
+                              <span className="font-mono font-bold">{step.value}</span>
+                            </div>
+                          ))}
+
+                          <div className="pt-3 mt-1 border-t-2 border-primary/20 flex justify-between items-center">
+                            <span className="text-sm font-black uppercase tracking-tight">Final Disbursement</span>
+                            <span className="text-lg font-black text-emerald-500">₹{explanationData.payout_amount}</span>
+                          </div>
+                        </div>
+                      </div>
+
+                      <div className="p-3 rounded-xl border border-blue-500/20 bg-blue-500/5">
+                        <p className="text-[10px] leading-relaxed text-blue-400/80 italic">
+                          This payout was calculated autonomously using Nexus Actuarial V2. Logic is derived from current reserve pool density and your active coverage plan.
+                        </p>
+                      </div>
                    </div>
-                 </div>
+                 ) : (
+                   <div className="bg-secondary/50 rounded-xl p-4 font-mono text-xs text-muted-foreground">
+                      <p className="text-center italic">Failed to load real-time trace.</p>
+                   </div>
+                 )}
                </motion.div>
             )}
           </div>

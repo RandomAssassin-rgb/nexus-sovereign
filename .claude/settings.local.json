@@ -1,0 +1,19 @@
+{
+  "permissions": {
+    "allow": [
+      "Bash(python -c \"import joblib; import xgboost; print\\('Dependencies OK'\\)\")",
+      "Bash(npm run *)",
+      "Bash(netstat -ano)",
+      "Bash(findstr \":3001\")",
+      "Bash(taskkill /F /PID 33264 /PID 34600)",
+      "Bash(taskkill //F //PID 33264)",
+      "Bash(taskkill //F //PID 34600)",
+      "Bash(taskkill //F //IM node.exe)",
+      "Bash(taskkill //F //IM python.exe)",
+      "Bash(curl -s -X POST http://127.0.0.1:8005/api/ml/health)",
+      "Bash(curl -s -X POST http://127.0.0.1:8005/api/ml/predict/fraud -H \"Content-Type: application/json\" -d '{\"gps_distance_km\": 5.2, \"order_pings_last_60m\": 8, \"claims_last_7d\": 3}')",
+      "Bash(curl -s http://127.0.0.1:8005/health)",
+      "Bash(curl -s -X POST http://127.0.0.1:8005/predict/fraud -H \"Content-Type: application/json\" -d '{\"gps_distance_km\": 5.2, \"order_pings_last_60m\": 8, \"claims_last_7d\": 3}')"
+    ]
+  }
+}
