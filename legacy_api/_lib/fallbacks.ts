@@ -1,5 +1,5 @@
-import axios from 'axios';
-import { calculateCoverageCap, calculateWeeklyPremium } from './actuarial.js';
+﻿import axios from 'axios';
+import { calculateCoverageCap, calculateWeeklyPremium } from './actuarial';
 
 export const DEFAULT_COORDS = {
   lat: 12.9249,
@@ -302,3 +302,4 @@ export const mockRecentClaims = [
     zone: 'Chromepet',
   },
 ];
+

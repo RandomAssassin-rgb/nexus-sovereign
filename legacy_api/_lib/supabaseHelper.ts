@@ -1,5 +1,5 @@
-import { supabaseServer } from './supabase.js';
-import { upsertSimulationUserCacheEntry } from '../../src/lib/adminSimulation.js';
+﻿import { supabaseServer } from './supabase';
+import { upsertSimulationUserCacheEntry } from '../../src/lib/adminSimulation';
 
 /**
  * Ensures a skeleton user exists in the 'users' table.
@@ -77,3 +77,4 @@ export async function ensureSkeletonUser(partnerId: string, initialBalance: numb
   console.error(`[Auth] Failed to create skeleton user: ${lastError?.message}`);
   throw lastError;
 }
+

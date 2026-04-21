@@ -1,4 +1,4 @@
-import { supabaseServer } from './supabase.js';
+﻿import { supabaseServer } from './supabase';
 
 export type AuthDiagnosticCode = 
   | 'DB_TABLES_MISSING'
@@ -89,3 +89,4 @@ export async function diagnoseAuthSystem(): Promise<AuthHealthResult> {
     };
   }
 }
+

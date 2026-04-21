@@ -1,6 +1,6 @@
-import type { VercelRequest, VercelResponse } from '@vercel/node';
+﻿import type { VercelRequest, VercelResponse } from '@vercel/node';
 import { supabaseServer } from '../../_lib/supabase';
-import { ensureSkeletonUser } from '../../_lib/supabaseHelper.ts';
+import { ensureSkeletonUser } from '../../_lib/supabaseHelper';
 import crypto from "crypto";
 
 export default async function handler(req: VercelRequest, res: VercelResponse) {
@@ -37,3 +37,4 @@ export default async function handler(req: VercelRequest, res: VercelResponse) {
     res.status(500).json({ error: err.message });
   }
 }
+

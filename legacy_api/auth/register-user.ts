@@ -1,3 +1,4 @@
-import handler from './worker/register-user.ts';
+﻿import handler from './worker/register-user';
 
 export default handler;
+

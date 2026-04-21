@@ -1,3 +1,4 @@
-import handler from '../../auth/admin/biometric.ts';
+﻿import handler from '../../auth/admin/biometric';
 
 export default handler;
+

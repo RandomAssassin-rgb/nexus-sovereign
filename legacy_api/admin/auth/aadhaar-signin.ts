@@ -1,3 +1,4 @@
-import handler from '../../auth/admin/aadhaar-signin.ts';
+﻿import handler from '../../auth/admin/aadhaar-signin';
 
 export default handler;
+

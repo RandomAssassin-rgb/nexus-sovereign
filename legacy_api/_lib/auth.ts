@@ -1,5 +1,5 @@
-import type { VercelRequest } from '@vercel/node';
-import { supabaseServer } from './supabase.js';
+﻿import type { VercelRequest } from '@vercel/node';
+import { supabaseServer } from './supabase';
 
 /**
  * Verify that the incoming request is from a legitimate admin.
@@ -19,3 +19,4 @@ export async function verifyAdmin(req: VercelRequest) {
   
   return true;
 }
+

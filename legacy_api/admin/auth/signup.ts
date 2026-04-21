@@ -1,3 +1,4 @@
-import handler from '../../auth/admin/signup.ts';
+﻿import handler from '../../auth/admin/signup';
 
 export default handler;
+
