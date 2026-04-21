@@ -14,7 +14,8 @@
     { "source": "/api/payments/(.*)", "destination": "/api/finance/payments/$1" },
     { "source": "/api/wallet/(.*)", "destination": "/api/finance/wallet/$1" },
     { "source": "/api/cron/(.*)", "destination": "/api/system/cron/$1" },
-    { "source": "/api/ml/(.*)", "destination": "/api/ml/main.py" }
+    { "source": "/api/ml/(.*)", "destination": "/api/ml/main.py" },
+    { "source": "/((?!api/|.*\\..*).*)", "destination": "/index.html" }
   ],
   "crons": [
     {
