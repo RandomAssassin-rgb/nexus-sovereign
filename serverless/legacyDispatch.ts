@@ -1,6 +1,5 @@
 import type { VercelRequest, VercelResponse } from '@vercel/node';
 import { legacyManifest } from './legacyManifest';
-import { verifyAdmin, verifyUser } from './_lib/auth';
 
 type GroupName = keyof typeof legacyManifest;
 
@@ -91,12 +90,15 @@ export async function dispatchLegacyHandler(
   const isAdminAuthRoute = group === 'admin' && routeKey.startsWith('auth/');
   try {
     if (group === 'admin' && !isAdminAuthRoute) {
+      const { verifyAdmin } = await import('./_lib/auth');
       await verifyAdmin(req);
     } else if (['user', 'claims'].includes(group)) {
+      const { verifyUser } = await import('./_lib/auth');
       await verifyUser(req);
     } else if (group === 'finance') {
       // Guard everything except Razorpay webhooks
       if (!routeKey.toLowerCase().includes('razorpay')) {
+        const { verifyUser } = await import('./_lib/auth');
         await verifyUser(req);
       }
     }
